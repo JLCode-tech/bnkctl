@@ -2,6 +2,13 @@
 
 All notable changes to `bnkctl` are documented in this file.
 
+## 1.0.0 (2026-10-23)
+
+
+### Features
+
+* initial unified multi-cloud bnkctl engine (AWS EKS, Azure AKS, GCP GKE) + BNK Forge docs ([cfd8fb8](https://github.com/JLCode-tech/bnkctl/commit/cfd8fb81d3f4a66a10c41dfd3c78f4370c387857))
+
 ## [2.4.1] - 2026-10-23
 
 ### Added
