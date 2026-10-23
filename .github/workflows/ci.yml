@@ -90,6 +90,7 @@ jobs:
           go build -o ./bin/bnkctl ./cmd/bnkctl
           for dir in examples/agentcore-demo examples/agentfoundry-demo examples/vertex-agent-demo; do
             echo '{"auths":{}}' > "$dir/cne_pull_64.json"
+            echo '{"auths":{}}' > "$dir/dockerconfig.json"
             echo 'dummy-license-jwt' > "$dir/license.jwt"
           done
           for cfg in examples/agentcore-demo/cluster.yaml examples/agentfoundry-demo/cluster.yaml examples/vertex-agent-demo/cluster.yaml; do
@@ -98,7 +99,7 @@ jobs:
             ./bin/bnkctl up --dry-run -c "$cfg"
             ./bin/bnkctl down --dry-run --yes -c "$cfg"
           done
-          rm -f examples/*/cne_pull_64.json examples/*/license.jwt
+          rm -f examples/*/cne_pull_64.json examples/*/dockerconfig.json examples/*/license.jwt
 
   goreleaser-check:
     name: goreleaser config sanity
