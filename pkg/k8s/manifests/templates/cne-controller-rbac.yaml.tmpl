@@ -1,0 +1,50 @@
+# gkebnkctl supplement to the cne-controller RBAC on BNK 2.4 / FLO 2.30.
+#
+# FLO generates the controller ClusterRole itself and grants only list/watch
+# on discovery.k8s.io endpointslices, while the 2.4 f5ingress chart grants get
+# as well and the 2.4.0 controller GETs the EndpointSlice of every Gateway
+# backend Service ("Error getting endpointSlice ... is forbidden", live
+# 2026-09-11). Without get, no pool ever gets members. Deleted by down.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Name }}
+  labels:
+    app.kubernetes.io/managed-by: gkebnkctl
+    app.kubernetes.io/instance: {{ .LabName }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["k8s.cni.cncf.io"]
+    resources: ["network-attachment-definitions"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["gateway.k8s.f5.com", "k8s.f5.com"]
+    resources: ["*"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Name }}
+  labels:
+    app.kubernetes.io/managed-by: gkebnkctl
+    app.kubernetes.io/instance: {{ .LabName }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .ServiceAccount }}
+    namespace: {{ .InstanceNS }}
+  - kind: ServiceAccount
+    name: cwc
+    namespace: f5-utils
+  - kind: ServiceAccount
+    name: cwc
+    namespace: f5-cne-core
+

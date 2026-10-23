@@ -1,0 +1,58 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-pp-conf
+  namespace: {{.Namespace}}
+data:
+  default.conf: |
+    server {
+        listen 80 proxy_protocol;
+        set_real_ip_from 0.0.0.0/0;
+        real_ip_header proxy_protocol;
+        location / {
+            add_header Content-Type text/plain always;
+            return 200 "awsbnkctl-scenario-proxy-protocol-OK proxy_addr=$proxy_protocol_addr\n";
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proxy-backend
+  namespace: {{.Namespace}}
+  labels: {app: proxy-backend}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: proxy-backend}
+  template:
+    metadata:
+      labels: {app: proxy-backend}
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.27-alpine
+        ports:
+        - {containerPort: 80}
+        volumeMounts:
+        - {name: conf, mountPath: /etc/nginx/conf.d}
+        readinessProbe:
+          tcpSocket: {port: 80}
+          initialDelaySeconds: 1
+          periodSeconds: 2
+        resources:
+          requests: {cpu: 10m, memory: 16Mi}
+          limits:   {cpu: 100m, memory: 64Mi}
+      volumes:
+      - name: conf
+        configMap: {name: nginx-pp-conf}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: proxy-backend
+  namespace: {{.Namespace}}
+spec:
+  selector: {app: proxy-backend}
+  ports:
+  - {name: http, port: 80, targetPort: 80, protocol: TCP}

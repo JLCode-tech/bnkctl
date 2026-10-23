@@ -1,0 +1,9 @@
+# CNEInstance core file collection reference manifest.
+# Applied via CNEInstance patch or CR assertion in scenario.go.
+#
+# Enables:
+#   spec.coreCollection.enabled: true
+# FLO reconciles:
+#   - CoreMond CR
+#   - CoreMond DaemonSet
+#   - hostPath core dump volume mounts on TMM pods

@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1220 720" width="1220" height="720">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#9aa5b1"/></marker></defs>
+<rect width="1220" height="720" fill="#ffffff"/>
+<text x="40" y="44" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="23" fill="#1c2530" font-weight="700" text-anchor="start">Token governance across the AWS AI estate</text>
+<text x="40" y="68" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="13" fill="#6b7785" font-weight="normal" text-anchor="start">BNK enforces where it is in the path. Forge accounts for everything AWS logs. Together they cover the estate.</text>
+<text x="40" y="112" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="10.5" fill="#6b7785" font-weight="700" text-anchor="start">WHERE THE TOKENS ARE BURNED</text>
+<rect x="40" y="130" width="322" height="34" rx="7" fill="#fff" stroke="#9aa5b1" stroke-width="1.4"/>
+<text x="52" y="152" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="11" fill="#1c2530" font-weight="600" text-anchor="start">Agent via AgentCore Gateway</text>
+<rect x="370" y="135" width="84" height="24" rx="7" fill="#fff8ee" stroke="#ff9900" stroke-width="1.2"/>
+<text x="412" y="151" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="8" fill="#8a5200" font-weight="700" text-anchor="middle">RPM·TPM·CPS</text>
+<text x="412" y="170" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="8.5" fill="#6b7785" font-weight="normal" text-anchor="middle">AWS covers this row</text>
+<line x1="462" y1="147" x2="543" y2="208" stroke="#e4002b" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="40" y="174" width="322" height="34" rx="7" fill="#fff" stroke="#9aa5b1" stroke-width="1.4"/>
+<text x="52" y="196" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="11" fill="#1c2530" font-weight="600" text-anchor="start">Agents on EKS / ECS / EC2</text>
+<line x1="462" y1="191" x2="543" y2="208" stroke="#e4002b" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="40" y="218" width="322" height="34" rx="7" fill="#fff" stroke="#9aa5b1" stroke-width="1.4"/>
+<text x="52" y="240" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="11" fill="#1c2530" font-weight="600" text-anchor="start">Self-hosted vLLM / NIM on GPU nodes</text>
+<line x1="462" y1="235" x2="543" y2="208" stroke="#e4002b" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="40" y="262" width="322" height="34" rx="7" fill="#fff" stroke="#9aa5b1" stroke-width="1.4"/>
+<text x="52" y="284" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="11" fill="#1c2530" font-weight="600" text-anchor="start">Third-party LLM APIs (OpenAI, ...)</text>
+<line x1="462" y1="279" x2="543" y2="208" stroke="#e4002b" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="40" y="306" width="322" height="34" rx="7" fill="#fff" stroke="#9aa5b1" stroke-width="1.4"/>
+<text x="52" y="328" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="11" fill="#1c2530" font-weight="600" text-anchor="start">SageMaker endpoints</text>
+<line x1="462" y1="323" x2="543" y2="208" stroke="#e4002b" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="40" y="350" width="322" height="34" rx="7" fill="#f4f6f8" stroke="#d8dee5" stroke-width="1.4" stroke-dasharray="4 3"/>
+<text x="52" y="372" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="11" fill="#6b7785" font-weight="600" text-anchor="start">Apps calling Bedrock over the AWS backbone</text>
+<line x1="462" y1="367" x2="543" y2="372" stroke="#c9d2db" stroke-width="1.6" marker-end="url(#a)" stroke-dasharray="3 3"/>
+<rect x="545" y="122" width="232" height="172" rx="7" fill="#fff" stroke="#e4002b" stroke-width="2"/>
+<text x="661" y="148" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="14" fill="#1c2530" font-weight="700" text-anchor="middle">F5 BNK</text>
+<text x="661" y="165" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="9.5" fill="#e4002b" font-weight="700" text-anchor="middle">in path — CAN STOP IT</text>
+<text x="560" y="190" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" fill="#1c2530" font-weight="normal" text-anchor="start">• per-user / per-model limits</text>
+<text x="560" y="210" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" fill="#1c2530" font-weight="normal" text-anchor="start">• 429 when budget is spent</text>
+<text x="560" y="230" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" fill="#1c2530" font-weight="normal" text-anchor="start">• counts in dSSM</text>
+<text x="661" y="262" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="9" fill="#b4232c" font-weight="600" text-anchor="middle">parses OpenAI-shaped usage;</text>
+<text x="661" y="276" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="9" fill="#b4232c" font-weight="600" text-anchor="middle">Bedrock-native meters ZERO today</text>
+<rect x="545" y="316" width="232" height="112" rx="7" fill="#f8fafb" stroke="#c9d2db" stroke-width="1.4" stroke-dasharray="4 3"/>
+<text x="661" y="342" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="13" fill="#1c2530" font-weight="700" text-anchor="middle">CloudWatch logs</text>
+<text x="661" y="359" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="9.5" fill="#6b7785" font-weight="700" text-anchor="middle">out of path — SEES ONLY</text>
+<text x="560" y="382" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" fill="#1c2530" font-weight="normal" text-anchor="start">• Bedrock invocation logs</text>
+<text x="560" y="400" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" fill="#1c2530" font-weight="normal" text-anchor="start">• real inputTokens / outputTokens</text>
+<rect x="838" y="178" width="210" height="214" rx="7" fill="#fff" stroke="#9aa5b1" stroke-width="1.8"/>
+<text x="943" y="206" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="14" fill="#1c2530" font-weight="700" text-anchor="middle">BNK Forge</text>
+<text x="943" y="224" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="10" fill="#6b7785" font-weight="normal" text-anchor="middle">the join point</text>
+<text x="852" y="250" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" fill="#1c2530" font-weight="normal" text-anchor="start">BNK: who was allowed,</text>
+<text x="852" y="269" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" fill="#1c2530" font-weight="normal" text-anchor="start">  throttled, refused</text>
+<text x="852" y="288" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" fill="#1c2530" font-weight="normal" text-anchor="start">AWS: what it cost</text>
+<text x="852" y="307" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" fill="#1c2530" font-weight="normal" text-anchor="start">  in real tokens</text>
+<text x="852" y="326" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" fill="#1c2530" font-weight="normal" text-anchor="start">one view, whole estate</text>
+<line x1="779" y1="208" x2="836" y2="245" stroke="#e4002b" stroke-width="1.6" marker-end="url(#a)"/>
+<line x1="779" y1="372" x2="836" y2="330" stroke="#9aa5b1" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="838" y="424" width="210" height="50" rx="7" fill="#fff" stroke="#9aa5b1" stroke-width="1.4"/>
+<text x="943.0" y="446.0" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="12.5" fill="#1c2530" font-weight="600" text-anchor="middle">Chargeback</text>
+<text x="943.0" y="463.0" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="middle">per team · per model</text>
+<line x1="943" y1="392" x2="943" y2="424" stroke="#9aa5b1" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="40" y="500" width="1140" height="84" rx="7" fill="#f6f8fa" stroke="#e3e8ee" stroke-width="1"/>
+<text x="60" y="528" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="13" fill="#1c2530" font-weight="700" text-anchor="start">“What is our AI spend, by team, and who is about to blow the budget?”</text>
+<text x="60" y="552" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="11" fill="#6b7785" font-weight="normal" text-anchor="start">The Gateway limiter answers it for one row. BNK + Forge answers it for every row — enforcing on the ones BNK fronts,</text>
+<text x="60" y="570" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="11" fill="#6b7785" font-weight="normal" text-anchor="start">accounting for the rest from AWS's own logs.</text>
+<text x="40" y="618" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="10.5" fill="#b4232c" font-weight="700" text-anchor="start">HONEST LIMITS</text>
+<text x="40" y="638" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="start">• Enforcement needs BNK in the path. Rows it does not front are visible but not stoppable.</text>
+<text x="40" y="656" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="start">• BNK token counting parses OpenAI-shaped usage; Bedrock-native responses meter as zero today (F5 feature request).</text>
+<text x="40" y="674" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="start">• The CloudWatch lane is accounting after the fact — it reports spend, it cannot prevent it.</text>
+<text x="40" y="692" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="start">• AgentCore Gateway limits are real and cover requests, tokens AND connections — but only on its own path,</text>
+<text x="40" y="710" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="start">   scoped to /v1/chat|messages|responses, excluding pass-through targets, and they fail open by design.</text>
+</svg>

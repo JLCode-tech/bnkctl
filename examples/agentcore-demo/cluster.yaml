@@ -1,0 +1,91 @@
+apiVersion: awsbnkctl/v1
+kind: Cluster
+
+metadata:
+  name: bnk-agentcore-demo
+  region: ap-southeast-2
+  labels:
+    purpose: bnk-agentcore-demo
+
+pattern: host-device
+
+network:
+  vpcCidr: 10.0.0.0/16
+  azs:
+    - ap-southeast-2a
+    - ap-southeast-2b
+  subnets:
+    public:
+      - cidr: 10.0.1.0/24
+        az: ap-southeast-2a
+      - cidr: 10.0.2.0/24
+        az: ap-southeast-2b
+    private:
+      - cidr: 10.0.11.0/24
+        az: ap-southeast-2a
+      - cidr: 10.0.12.0/24
+        az: ap-southeast-2b
+  dataPath:
+    external:
+      cidr: 10.0.10.0/24
+      az: ap-southeast-2a
+    internal:
+      cidr: 10.0.20.0/24
+      az: ap-southeast-2a
+  natGateways: 1
+
+cluster:
+  kubernetesVersion: "1.35"
+  nodeGroups:
+    - name: default
+      instanceType: m6i.4xlarge
+      desiredSize: 3
+      minSize: 3
+      maxSize: 4
+      diskSize: 50
+
+addons:
+  lbController:
+    enabled: true
+
+# Private F5 supply-chain credentials. Both are gitignored repo-wide
+# (`cne_pull_64.json`, `*.jwt`) and must NEVER be committed — supply your own
+# copies here, or symlink them in from wherever you keep them locally.
+# Relative paths resolve against this file's directory, not your shell's CWD.
+bnk:
+  farArchive: ./cne_pull_64.json     # REPLACE with your F5 FAR pull credentials JSON
+  jwt: ./license.jwt                 # REPLACE with your F5 subscription JWT
+  version: "2.4.1"
+  manifestVersion: "2.4.1"
+  floVersion: "v2.30.0-0.11.4"
+  # bgp: open TCP 179 (BGP) + UDP 3784 (BFD) from the external subnet on the
+  # data-plane security group, so TMM can peer with an AWS Route Server endpoint
+  # there. Harmless with no peer. The peer and the BGP stanza (a ZebOS ConfigMap)
+  # are yours to add: see bgp-route-server.yaml in this directory.
+  bgp: true
+  aiGateway:
+    enabled: true
+    aiMetrics: true
+    defaultEgressRoute: true
+    dnsResolver: true
+    dssmSentinel: true
+    multiNumaSpanning: true
+
+testing:
+  jumphost:
+    enabled: true
+    instanceType: c6i.4xlarge
+    mgmtSubnetIndex: 0
+
+forge:
+  enabled: true
+  url: http://localhost:8000
+  mcpUrl: http://localhost:8081/mcp/
+  credentialTemplateId: 1
+  username: admin
+  password: admin123
+
+tags:
+  cost-center: RnD-AI
+  env: demo
+  purpose: bnk-agentcore-demo

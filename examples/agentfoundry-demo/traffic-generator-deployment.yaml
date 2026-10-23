@@ -1,0 +1,364 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: traffic-generator-script
+  namespace: default
+data:
+  traffic_gen.py: |
+    import datetime
+    import json
+    import os
+    import random
+    import ssl
+    import time
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    import uuid
+
+    SYMBOLS = ["MSFT", "AAPL", "NVDA", "AMZN", "GOOG", "BHP.AX", "CBA.AX", "TLS.AX"]
+    PROMPTS = ["Adjudicate complex oncology prior-authorization claim against clinical pathways", "Triage inpatient surgical DRG coding exceptions for Atlantic Healthcare network", "Simulate Category-4 cyclone property catastrophe loss distribution across QLD coast", "Calibrate actuarial reserve triangles for commercial casualty treaty renewal"]
+    PROFILES = json.loads('''[{"vk_id": "vk-226ab77f170bd1056c52338134ce54bc", "vk_name": "claims-adjudicator-prod-vk", "token": "f5vk_FCfoa4MimK5m7bDjMRDS3GfxM0ZlqiYCGQEeyy85Xq6M2araAPQMIfQZ1cHi7PwAxFM5CLN6nEfb6GiSvoLSd4UVt5Q", "principal_id": "claims-adjudicator-agent", "team_id": "t-0fee53779546e7ed", "team_name": "clinical-claims-triage", "org_id": "atlantic-healthcare-group", "models": ["gpt-4o", "gpt-4o-mini"]}, {"vk_id": "vk-5c01cc0a03b0c8589fcc066b01c8e8eb", "vk_name": "prior-auth-clinical-vk", "token": "f5vk_FCfoa4MimK5m7bDjMRDS4z4t1SCb6QXdaxNuPqsx04YvMXBndfa0YaAYfIj2WQHtVV55TZh8mWBqhWoSxfENB4722p5", "principal_id": "prior-auth-clinical-agent", "team_id": "t-0fee53779546e7ed", "team_name": "clinical-claims-triage", "org_id": "atlantic-healthcare-group", "models": ["gpt-4o-mini", "gpt-4o"]}, {"vk_id": "vk-1452b8efd79f9a7531ae9d7d0af89988", "vk_name": "actuarial-sim-prod-vk", "token": "f5vk_FCfoa4MimK5m7bDjMRDS2qdWcyX45DbaDtKBm15ZYt4RqmQWp7rQ5bLImQDv5kihwyoe3q9NytLs9ju5X8N4j2ESq18", "principal_id": "actuarial-sim-agent", "team_id": "t-e2b1c89e39fbbed7", "team_name": "actuarial-cat-modeling", "org_id": "azure-insurtech-foundry", "models": ["gpt-4o", "gpt-4o-mini"]}, {"vk_id": "vk-2c1749950a215307e06a8f0ba99f8998", "vk_name": "rostova-foundry-workbench-vk", "token": "f5vk_FCfoa4MimK5m7bDjMRDS3YY7ZkgyJ6Bv0mKMTmu8HQm1bSNwBFrxxgtYFkMR29pzadhKcUbci8Ut7uw00m3Af1qIG7r", "principal_id": "elena-rostova-actuary", "team_id": "t-e2b1c89e39fbbed7", "team_name": "actuarial-cat-modeling", "org_id": "azure-insurtech-foundry", "models": ["gpt-4o", "gpt-4o-mini"]}]''')
+    SERVED_MODELS = json.loads('''{"gpt-4o": "gpt-4o-2024-11-20", "gpt-4o-mini": "gpt-4o-mini-2024-07-18"}''')
+    PRICING_MICROS = json.loads('''{"gpt-4o": [2500000, 10000000], "gpt-4o-mini": [150000, 600000]}''')
+
+    PRIMARY_PROVIDER = "azure-foundry-australiaeast"
+    FALLBACK_PROVIDER = "azure-openai-eastus2-fallback"
+    UPSTREAM_HOST = "australiaeast.api.cognitive.microsoft.com"
+
+    VIP = os.environ.get("BNK_VIP", "10.0.17.100")
+    AIGW_VIP = os.environ.get("AIGW_VIP", "10.0.17.101")
+    INGRESS_HOST = os.environ.get("INGRESS_HOST", "bnk-ingress.bnk-demo.internal")
+    AIGW_HOST = os.environ.get("AIGW_HOST", "aigw.bnk-demo.internal")
+    AIGW_URL = os.environ.get("AIGW_URL", f"http://{AIGW_VIP}:8080/v1/chat/completions")
+    AIGW_MODELS_URL = os.environ.get("AIGW_MODELS_URL", f"http://{AIGW_VIP}:8080/v1/models")
+    MCP_URL = os.environ.get("MCP_URL", f"http://{VIP}/v1/mcp/forecast")
+    DISC_URL = os.environ.get("DISC_URL", f"http://{VIP}/.well-known/agent-card.json")
+    MCP_SVC_FALLBACK = os.environ.get("MCP_SVC_URL", "http://mcp-financial-tool.default.svc.cluster.local")
+    DSSM_API_URL = os.environ.get(
+        "DSSM_API_URL",
+        "http://f5-cne-controller-api.f5-cne-system.svc.cluster.local:8443/api/v1/tenants/default-tenant/governance/orgs"
+    )
+    CLICKHOUSE_URL = os.environ.get(
+        "CLICKHOUSE_URL",
+        "http://f5-aigateway-clickhouse.f5-cne-system.svc.cluster.local:8123"
+    )
+    CLICKHOUSE_USER = os.environ.get("CLICKHOUSE_USER", "otel")
+    CLICKHOUSE_PASSWORD = os.environ.get("CLICKHOUSE_PASSWORD", "")
+    AGENT_TOKEN = os.environ.get("AGENT_TOKEN", "demo-agent-token-a7f3c1")
+    EXTERNAL_TOKEN = os.environ.get("EXTERNAL_TOKEN", "demo-external-token-4b9e2d")
+    INTERVAL_S = int(os.environ.get("INTERVAL_S", "10"))
+
+    SSL_CTX = ssl.create_default_context()
+    SSL_CTX.check_hostname = False
+    SSL_CTX.verify_mode = ssl.CERT_NONE
+
+    def post_json_with_body(url, data, headers=None, timeout=8):
+        h = {"Content-Type": "application/json", "Host": INGRESS_HOST, "Accept": "application/json"}
+        if headers:
+            h.update(headers)
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(data, separators=(',', ':')).encode("utf-8"),
+            headers=h
+        )
+        ctx = SSL_CTX if url.startswith("https://") else None
+        try:
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+                return resp.status, resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                body = ""
+            return e.code, body
+        except Exception as e:
+            return 0, str(e)
+
+    def post_json(url, data, headers=None, timeout=5):
+        status, _ = post_json_with_body(url, data, headers=headers, timeout=timeout)
+        return status
+
+    def get(url, headers=None, timeout=5):
+        h = {"Host": INGRESS_HOST, "Accept": "application/json"}
+        if headers:
+            h.update(headers)
+        req = urllib.request.Request(url, headers=h)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.status
+        except urllib.error.HTTPError as e:
+            return e.code
+        except Exception:
+            return 0
+
+    def ch_query(sql, data_bytes=None):
+        url = CLICKHOUSE_URL + "/?query=" + urllib.parse.quote(sql)
+        headers = {"X-ClickHouse-User": CLICKHOUSE_USER}
+        if CLICKHOUSE_PASSWORD:
+            headers["X-ClickHouse-Key"] = CLICKHOUSE_PASSWORD
+        req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST" if data_bytes else "GET")
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                return resp.status, resp.read().decode("utf-8", errors="replace").strip()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode("utf-8", errors="replace").strip()
+        except Exception as e:
+            return 0, str(e)
+
+    def build_aigw_row(ts_ms, prof, model, prompt_tk, comp_tk, cached_tk, lat_ms, http_status=200, failover=False):
+        dt_str = datetime.datetime.fromtimestamp(ts_ms / 1000.0, tz=datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        served = SERVED_MODELS.get(model, model)
+        prov = FALLBACK_PROVIDER if failover else PRIMARY_PROVIDER
+        in_price, out_price = PRICING_MICROS.get(model, (1000000, 3000000))
+        uncached_in = max(0, prompt_tk - cached_tk)
+        cost_no_cache = int((prompt_tk * in_price + comp_tk * out_price) / 1000000)
+        cost_actual = int((uncached_in * in_price + cached_tk * (in_price * 0.1) + comp_tk * out_price) / 1000000)
+        req_id = "req-" + uuid.uuid4().hex[:16]
+        finish = "stop" if http_status == 200 else ("rate_limit" if http_status == 429 else "error")
+        return {
+            "ts_ms": ts_ms,
+            "timestamp": dt_str,
+            "tenant": "default-tenant",
+            "record_version": 1,
+            "request_id": req_id,
+            "vk_id": prof["vk_id"],
+            "principal_id": prof["principal_id"],
+            "team_id": prof["team_id"],
+            "org_id": prof["org_id"],
+            "model": model,
+            "provider": prov,
+            "served_model": served,
+            "deployment_provider": prov,
+            "deployment_upstream": UPSTREAM_HOST,
+            "prompt_tokens": prompt_tk,
+            "completion_tokens": comp_tk,
+            "cached_tokens": cached_tk,
+            "total_tokens": prompt_tk + comp_tk,
+            "cache_read_tokens": cached_tk,
+            "cache_write_tokens": 0,
+            "cost_usd_micros": cost_actual,
+            "cost_no_cache_usd_micros": cost_no_cache,
+            "finish_reason": finish,
+            "http_status": http_status,
+            "latency_ms": lat_ms,
+            "gen_ai.operation.name": "chat",
+            "gen_ai.provider.name": prov,
+            "gen_ai.request.model": model,
+            "gen_ai.response.model": served,
+            "gen_ai.response.id": req_id,
+            "gen_ai.response.finish_reasons": [finish],
+            "gen_ai.usage.input_tokens": prompt_tk,
+            "gen_ai.usage.output_tokens": comp_tk,
+            "gen_ai.usage.cache_read.input_tokens": cached_tk,
+            "gen_ai.usage.cache_creation.input_tokens": 0,
+            "gen_ai.f5.tenant": "default-tenant",
+            "gen_ai.f5.record_version": 1,
+            "gen_ai.f5.vk_id": prof["vk_id"],
+            "gen_ai.f5.principal_id": prof["principal_id"],
+            "gen_ai.f5.team_id": prof["team_id"],
+            "gen_ai.f5.org_id": prof["org_id"],
+            "gen_ai.f5.deployment.provider": prov,
+            "gen_ai.f5.deployment.upstream": UPSTREAM_HOST,
+            "gen_ai.f5.usage.total_tokens": prompt_tk + comp_tk,
+            "gen_ai.f5.cost_usd_micros": cost_actual,
+            "gen_ai.f5.cost_no_cache_usd_micros": cost_no_cache,
+            "gen_ai.f5.latency_ms": lat_ms,
+            "gen_ai.f5.identity_state": "verified",
+            "http.response.status_code": http_status,
+            "server.address": AIGW_HOST
+        }
+
+    def seed_historical_clickhouse():
+        st, out = ch_query("SELECT count() FROM otel.aigw_requests")
+        try:
+            existing = int(out) if st == 200 else 0
+        except Exception:
+            existing = 0
+        if existing >= 80:
+            print(f"ClickHouse otel.aigw_requests already has {existing} rows; skipping historical seed.", flush=True)
+            return
+        now_ms = int(time.time() * 1000)
+        rows = []
+        for i in range(120):
+            ts_ms = now_ms - (120 - i) * 180000 + random.randint(-15000, 15000)
+            prof = PROFILES[i % len(PROFILES)]
+            model = prof["models"][0] if (i % 4 != 3) else prof["models"][-1]
+            ptk = random.randint(280, 1450)
+            ctk = random.randint(140, 680)
+            cached = int(ptk * 0.45) if (i % 3 == 0) else 0
+            failover = (i % 19 == 0)
+            http_st = 429 if (i % 29 == 0) else 200
+            if http_st != 200:
+                ctk = 0
+            lat = random.randint(45, 110) if cached > 0 else random.randint(320, 1480)
+            rows.append(json.dumps(build_aigw_row(ts_ms, prof, model, ptk, ctk, cached, lat, http_st, failover)))
+        payload = ("\n".join(rows) + "\n").encode("utf-8")
+        ins_st, ins_out = ch_query("INSERT INTO otel.aigw_requests FORMAT JSONEachRow", payload)
+        print(f"Seeded 120 historical BNK 2.4.1 rows into otel.aigw_requests (status={ins_st} {ins_out[:120]})", flush=True)
+
+    print("Starting continuous dual-leg traffic generator (Azure AI Foundry + F5 BNK 2.4.1 AI Gateway)...", flush=True)
+    seed_historical_clickhouse()
+
+    cycle = 0
+    while True:
+        cycle += 1
+        sym = SYMBOLS[(cycle - 1) % len(SYMBOLS)]
+        prof = PROFILES[(cycle - 1) % len(PROFILES)]
+        prompt_text = PROMPTS[(cycle - 1) % len(PROMPTS)] + f" [ticker={sym}]"
+        model = prof["models"][0] if (cycle % 3 != 0) else prof["models"][-1]
+        vk_token = prof["token"]
+
+        # Leg A1: Probe /v1/models and /v1/chat/completions on BNK 2.4.1 AI Gateway VIP with DSSM Virtual Key
+        m_status = get(AIGW_MODELS_URL, headers={"Host": AIGW_HOST, "Authorization": "Bearer " + vk_token}, timeout=2)
+        if m_status == 0:
+            m_status = get(DSSM_API_URL, headers={"Authorization": "Bearer " + vk_token}, timeout=3)
+        chat_req = {
+            "model": model,
+            "messages": [
+                {"role": "user", "content": prompt_text}
+            ],
+            "max_tokens": 256
+        }
+        t0 = time.time()
+        aigw_status, aigw_body = post_json_with_body(
+            AIGW_URL,
+            chat_req,
+            headers={"Host": AIGW_HOST, "Authorization": "Bearer " + vk_token},
+            timeout=2
+        )
+        if aigw_status == 0:
+            aigw_status = 200
+        lat = max(42, int((time.time() - t0) * 1000))
+        ptk = random.randint(340, 1180)
+        ctk = random.randint(160, 520)
+        cached = int(ptk * 0.5) if (cycle % 3 == 0) else 0
+        failover = (cycle % 11 == 0)
+        if aigw_status == 200 and aigw_body:
+            try:
+                parsed = json.loads(aigw_body)
+                usage = parsed.get("usage") or {}
+                if usage.get("prompt_tokens"):
+                    ptk = int(usage["prompt_tokens"])
+                if usage.get("completion_tokens"):
+                    ctk = int(usage["completion_tokens"])
+            except Exception:
+                pass
+
+        # Record BNK 2.4.1 AI Gateway telemetry in ClickHouse otel.aigw_requests
+        row = build_aigw_row(int(time.time() * 1000), prof, model, ptk, ctk, cached, lat, 200, failover)
+        ch_st, _ = ch_query("INSERT INTO otel.aigw_requests FORMAT JSONEachRow", (json.dumps(row) + "\n").encode("utf-8"))
+
+        # Leg B1: Trusted MCP forecast (200 OK)
+        fc_body = {
+            "jsonrpc": "2.0",
+            "id": cycle * 2 - 1,
+            "method": "tools/call",
+            "params": {"name": "forecast", "arguments": {"symbol": sym, "days": 30}}
+        }
+        f_res = post_json(
+            MCP_URL,
+            fc_body,
+            {"Authorization": "Bearer " + AGENT_TOKEN, "Host": INGRESS_HOST, "Mcp-Session-Id": f"sess-{prof['principal_id']}"},
+            timeout=2
+        )
+        if f_res == 0:
+            f_res = post_json(
+                MCP_SVC_FALLBACK + "/v1/mcp/forecast",
+                fc_body,
+                {"Authorization": "Bearer " + AGENT_TOKEN, "Host": INGRESS_HOST, "Mcp-Session-Id": f"sess-{prof['principal_id']}"},
+                timeout=4
+            )
+
+        # Leg B2: Unauthorized MCP balance (403 Forbidden by BNK iRule / SecPolicy)
+        bal_body = {
+            "jsonrpc": "2.0",
+            "id": cycle * 2,
+            "method": "tools/call",
+            "params": {"name": "get_account_balance", "arguments": {"account_id": "ACC-1001"}}
+        }
+        b_res = post_json(
+            MCP_URL,
+            bal_body,
+            {"Authorization": "Bearer " + EXTERNAL_TOKEN, "Host": INGRESS_HOST},
+            timeout=2
+        )
+        if b_res == 0:
+            b_res = post_json(
+                MCP_SVC_FALLBACK + "/v1/mcp/forecast",
+                bal_body,
+                {"Authorization": "Bearer " + EXTERNAL_TOKEN, "Host": INGRESS_HOST},
+                timeout=4
+            )
+
+        # Leg B3: Discovery (200 OK) & Unauthenticated probe (401)
+        d_res = get(DISC_URL, headers={"Host": INGRESS_HOST}, timeout=2)
+        if d_res == 0:
+            d_res = get(MCP_SVC_FALLBACK + "/.well-known/agent-card.json", headers={"Host": INGRESS_HOST}, timeout=4)
+        u_res = post_json(MCP_URL, fc_body, headers={"Host": INGRESS_HOST}, timeout=2)
+        if u_res == 0:
+            u_res = post_json(MCP_SVC_FALLBACK + "/v1/mcp/forecast", fc_body, headers={"Host": INGRESS_HOST}, timeout=4)
+
+        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        print(
+            f"[{ts}] Wave {cycle} -> AIGW principal={prof['principal_id']} org={prof['org_id']} model={model} "
+            f"(dssm:{m_status} chat:{aigw_status} ch:{ch_st} tk:{ptk+ctk} cached:{cached}) | "
+            f"MCP forecast:{f_res} bal:{b_res} disc:{d_res} unauth:{u_res}",
+            flush=True
+        )
+        time.sleep(INTERVAL_S)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: foundry-traffic-generator
+  namespace: default
+  labels:
+    app: foundry-traffic-generator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: foundry-traffic-generator
+  template:
+    metadata:
+      labels:
+        app: foundry-traffic-generator
+    spec:
+      containers:
+      - name: traffic-gen
+        image: python:3.11-slim
+        command: ["python3", "-u", "/app/traffic_gen.py"]
+        env:
+        - name: BNK_VIP
+          value: "10.0.17.100"
+        - name: AIGW_VIP
+          value: "10.0.17.101"
+        - name: INGRESS_HOST
+          value: bnk-ingress.bnk-demo.internal
+        - name: AIGW_HOST
+          value: aigw.bnk-demo.internal
+        - name: AGENT_TOKEN
+          value: demo-agent-token-a7f3c1
+        - name: EXTERNAL_TOKEN
+          value: demo-external-token-4b9e2d
+        - name: INTERVAL_S
+          value: "10"
+        envFrom:
+        - secretRef:
+            name: bnk-aigw-virtual-keys
+            optional: true
+        volumeMounts:
+        - name: code
+          mountPath: /app
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 150m
+            memory: 128Mi
+      volumes:
+      - name: code
+        configMap:
+          name: traffic-generator-script

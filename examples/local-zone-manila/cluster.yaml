@@ -1,0 +1,59 @@
+apiVersion: awsbnkctl/v1
+kind: Cluster
+
+metadata:
+  name: lz-manila
+  region: ap-southeast-1
+  labels:
+    purpose: bnk-localzone-manila
+    environment: edge-lz
+
+pattern: host-device
+
+network:
+  vpcCidr: 10.102.0.0/16
+
+  azs:
+    - ap-southeast-1a
+    - ap-southeast-1b
+    - ap-southeast-1-mnl-1a
+
+  subnets:
+    public:
+      - cidr: 10.102.1.0/24
+        az: ap-southeast-1a
+      - cidr: 10.102.2.0/24
+        az: ap-southeast-1b
+      - cidr: 10.102.3.0/24
+        az: ap-southeast-1-mnl-1a
+
+    private:
+      - cidr: 10.102.11.0/24
+        az: ap-southeast-1a
+      - cidr: 10.102.12.0/24
+        az: ap-southeast-1b
+
+  dataPath:
+    external:
+      cidr: 10.102.10.0/24
+      az: ap-southeast-1-mnl-1a
+    internal:
+      cidr: 10.102.20.0/24
+      az: ap-southeast-1-mnl-1a
+
+  natGateways: 1
+
+cluster:
+  kubernetesVersion: "1.35"
+  nodeGroups:
+    - name: lz-workers
+      instanceType: m5.2xlarge
+      desiredSize: 3
+      minSize: 3
+      maxSize: 4
+      diskSize: 50
+
+bnk:
+  farArchive: ../../cne_pull_64.json
+  jwt: ../../license.jwt
+  bgp: false

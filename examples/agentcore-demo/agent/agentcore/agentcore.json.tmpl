@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.agentcore.aws.dev/v1/agentcore.json",
+  "name": "bnkagent",
+  "version": 1,
+  "managedBy": "CDK",
+  "tags": {
+    "agentcore:created-by": "agentcore-cli",
+    "agentcore:project-name": "bnkagent"
+  },
+  "runtimes": [
+    {
+      "name": "FinanceAgentV2Agent",
+      "build": "Container",
+      "entrypoint": "main.py",
+      "codeLocation": "app/FinanceAgentV2Agent/",
+      "dockerfile": "Dockerfile",
+      "buildContextPath": "app/FinanceAgentV2Agent/",
+      "runtimeVersion": "PYTHON_3_14",
+      "networkMode": "VPC",
+      "networkConfig": {
+        "subnets": {{ .AgentSubnetIdsJson }},
+        "securityGroups": {{ .AgentSecurityGroupIdsJson }},
+        "vpcId": "{{ .VpcId }}"
+      },
+      "protocol": "HTTP"
+    }
+  ],
+  "memories": [],
+  "knowledgeBases": [],
+  "credentials": [],
+  "evaluators": [],
+  "onlineEvalConfigs": [],
+  "agentCoreGateways": [],
+  "policyEngines": [],
+  "configBundles": [],
+  "abTests": [],
+  "harnesses": [
+    {
+      "name": "FinanceAgentV2",
+      "path": "app/FinanceAgentV2"
+    }
+  ],
+  "datasets": [],
+  "payments": []
+}

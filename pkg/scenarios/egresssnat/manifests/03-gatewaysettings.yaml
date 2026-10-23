@@ -1,0 +1,17 @@
+# GatewaySettings for egress on BNK 2.4: the egressConfigs entry the
+# EgressGateway references by sectionName. Automap SNATs the pod traffic to
+# the self IP of the interface it leaves TMM on (the external VLAN, via the
+# Infra default route); networkRef is the Infra VLAN the worker-node VXLAN
+# tunnel terminates on (Infra egressDefaults names the same one).
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: GatewaySettings
+metadata:
+  name: {{.EgressName}}
+  namespace: {{.Namespace}}
+spec:
+  egressConfigs:
+  - name: {{.EgressConfig}}
+    networkRef:
+      name: {{.TunnelNetwork}}
+    sourceNATConfig:
+      type: Automap

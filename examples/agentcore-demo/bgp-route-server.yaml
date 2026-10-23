@@ -1,0 +1,48 @@
+# bgp-route-server.yaml — peer TMM with an AWS Route Server (BGP + BFD).
+#
+# cluster.yaml sets bnk.bgp: true, which opens TCP 179 and UDP 3784 on the
+# data-plane security group. That is all the cluster side needs on BNK 2.4.
+# This file is the BGP stanza: FLO installs 2.4.0 with the ZebOS routing
+# container, which reads its configuration from this ConfigMap and reloads it
+# without a TMM restart. Apply it after `awsbnkctl up`, once you have a Route
+# Server endpoint in the external data-path subnet (docs/BGP-ROUTE-SERVER.md).
+#
+# Addresses match this example's network.dataPath.external (10.0.10.0/24):
+#   10.0.10.240  BGP router-id. Give the Route Server peer TMM_EXT_SELFIP from
+#                state.env as --peer-address; IPAM allocates it from .224-.254.
+#   10.0.10.31   REPLACE (three lines) with the Route Server endpoint address
+#                from `aws ec2 describe-route-server-endpoints`.
+# ASNs: 65000 is TMM, 65001 is the Route Server (--amazon-side-asn 65001).
+#
+# `redistribute kernel` announces the Gateway VIPs (10.0.10.150 here), which
+# TMM installs as kernel routes. Connected routes are not redistributed: the
+# self-IP subnet is already local to the VPC. `fall-over bfd` matches the peer
+# created with PeerLivenessDetection=bfd; ext-vlan-infra is the external VLAN
+# inside the routing container.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: f5-tmm-dynamic-routing-template
+  namespace: f5-cne-system
+data:
+  ZebOS.conf: |
+    !
+    router bgp 65000
+     bgp router-id 10.0.10.240
+     bgp log-neighbor-changes
+     no bgp default ipv4-unicast
+     redistribute kernel
+     timers bgp 5 15
+     neighbor 10.0.10.31 remote-as 65001
+     neighbor 10.0.10.31 timers 5 15
+     neighbor 10.0.10.31 fall-over bfd
+     !
+     address-family ipv4 unicast
+      redistribute kernel
+      neighbor 10.0.10.31 activate
+     exit-address-family
+    !
+    bfd gtsm enable
+    interface ext-vlan-infra
+     bfd interval 300 minrx 300 multiplier 3
+    !

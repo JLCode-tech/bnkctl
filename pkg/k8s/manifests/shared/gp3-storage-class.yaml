@@ -1,0 +1,19 @@
+---
+# gp3 StorageClass backed by aws-ebs-csi-driver (EKS managed addon).
+# BNK pods (f5-dssm, f5-downloader, cwc, observer, fluentd) reference
+# this via PVC.spec.storageClassName=gp3 (BnkSpec default).
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+  labels:
+    app.kubernetes.io/managed-by: awsbnkctl
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+parameters:
+  type: gp3
+  encrypted: "true"

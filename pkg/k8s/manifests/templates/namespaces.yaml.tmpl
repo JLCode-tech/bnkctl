@@ -1,0 +1,31 @@
+# Rendered by internal/k8s/render.RenderNamespaces from cluster.yaml
+# (egress.testNamespace) — docs/SPEC-go-tracer.md §5 per-file mapping.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: f5-cne-core
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: f5-cne-system
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: f5-bnk-instance
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: f5-utils
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .TestNamespace }}

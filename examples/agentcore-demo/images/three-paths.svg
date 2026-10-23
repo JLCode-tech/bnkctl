@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 760" width="1180" height="760">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#9aa5b1"/></marker></defs>
+<rect width="1180" height="760" fill="#ffffff"/>
+<text x="40" y="44" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="23" fill="#1c2530" font-weight="700" text-anchor="start">Governing the agentic action path</text>
+<text x="40" y="68" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="13" fill="#6b7785" font-weight="normal" text-anchor="start">Amazon Bedrock AgentCore  ×  F5 BIG-IP Next for Kubernetes</text>
+<text x="1140" y="68" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="11.5" fill="#e4002b" font-weight="600" text-anchor="end">the tool hop is the one hop you control</text>
+<rect x="40" y="96" width="1100" height="178" rx="10" fill="#f6f8fa" stroke="#e3e8ee" stroke-width="1"/>
+<circle cx="62" cy="120" r="11" fill="#127c3f"/>
+<text x="62" y="124" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="12" fill="#fff" font-weight="700" text-anchor="middle">1</text>
+<text x="82" y="125" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="14" fill="#1c2530" font-weight="700" text-anchor="start">Trusted agent path</text>
+<text x="1126" y="125" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="11" fill="#6b7785" font-weight="600" text-anchor="end">runs today</text>
+<rect x="70" y="148" width="168" height="62" rx="7" fill="#fff" stroke="#ff9900" stroke-width="1.4"/>
+<text x="154.0" y="176.0" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="12.5" fill="#1c2530" font-weight="600" text-anchor="middle">AgentCore Runtime</text>
+<text x="154.0" y="193.0" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="middle">ENIs .11.15 / .12.191</text>
+<text x="70" y="226" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="9.5" fill="#6b7785" font-weight="normal" text-anchor="start">multi-homed — key limits on</text>
+<text x="70" y="240" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="9.5" fill="#6b7785" font-weight="normal" text-anchor="start">caller identity, not client IP</text>
+<rect x="302" y="130" width="150" height="52" rx="7" fill="#fff" stroke="#ff9900" stroke-width="1.4"/>
+<text x="377.0" y="153.0" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="12.5" fill="#1c2530" font-weight="600" text-anchor="middle">Amazon Bedrock</text>
+<text x="377.0" y="170.0" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="middle">stopReason: tool_use</text>
+<line x1="238" y1="158" x2="302" y2="146" stroke="#ff9900" stroke-width="1.6" marker-end="url(#a)"/>
+<text x="270.0" y="145.0" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" fill="#6b7785" font-weight="normal" text-anchor="middle">1. reason</text>
+<line x1="302" y1="170" x2="240" y2="176" stroke="#ff9900" stroke-width="1.6" marker-end="url(#a)"/>
+<text x="271.0" y="188.0" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" fill="#6b7785" font-weight="normal" text-anchor="middle">4. narrate</text>
+<rect x="520" y="136" width="210" height="104" rx="7" fill="#fff" stroke="#e4002b" stroke-width="2"/>
+<text x="625" y="160" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="12.5" fill="#1c2530" font-weight="600" text-anchor="middle">F5 BNK  (TMM)</text>
+<text x="625" y="180" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="middle">VIP 10.0.10.100</text>
+<text x="625" y="198" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" fill="#6b7785" font-weight="normal" text-anchor="middle">authz · rate · firewall · log</text>
+<text x="625" y="222" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="9.5" fill="#e4002b" font-weight="700" text-anchor="middle">ONLY CHECKPOINT</text>
+<line x1="238" y1="196" x2="520" y2="196" stroke="#9aa5b1" stroke-width="1.6" marker-end="url(#a)"/>
+<text x="379.0" y="211.0" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" fill="#6b7785" font-weight="normal" text-anchor="middle">2. tools/call</text>
+<rect x="792" y="158" width="150" height="58" rx="7" fill="#fff" stroke="#9aa5b1" stroke-width="1.4"/>
+<text x="867.0" y="184.0" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="12.5" fill="#1c2530" font-weight="600" text-anchor="middle">MCP tool pod</text>
+<text x="867.0" y="201.0" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="middle">forecast()</text>
+<line x1="730" y1="188" x2="792" y2="188" stroke="#127c3f" stroke-width="1.6" marker-end="url(#a)"/>
+<text x="761.0" y="181.0" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" fill="#6b7785" font-weight="normal" text-anchor="middle">3. fact</text>
+<text x="1000" y="180" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="start">AgentCore is not in</text>
+<text x="1000" y="195" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="start">the tool hop, by design.</text>
+<rect x="40" y="296" width="1100" height="168" rx="10" fill="#f6f8fa" stroke="#e3e8ee" stroke-width="1"/>
+<circle cx="62" cy="320" r="11" fill="#6b7785"/>
+<text x="62" y="324" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="12" fill="#fff" font-weight="700" text-anchor="middle">2</text>
+<text x="82" y="325" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="14" fill="#1c2530" font-weight="700" text-anchor="start">Double-checked path</text>
+<text x="1126" y="325" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="11" fill="#6b7785" font-weight="600" text-anchor="end">not built</text>
+<rect x="70" y="350" width="168" height="58" rx="7" fill="#fff" stroke="#ff9900" stroke-width="1.4"/>
+<text x="154.0" y="383.0" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="12.5" fill="#1c2530" font-weight="600" text-anchor="middle">AgentCore Runtime</text>
+<rect x="292" y="340" width="186" height="78" rx="7" fill="#fff" stroke="#ff9900" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="385.0" y="376.0" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="12.5" fill="#1c2530" font-weight="600" text-anchor="middle">AgentCore Gateway</text>
+<text x="385.0" y="393.0" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="middle">Cedar · guardrails</text>
+<text x="385" y="404" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="9.5" fill="#6b7785" font-weight="normal" text-anchor="middle">identity-aware per-tool authz</text>
+<line x1="238" y1="378" x2="292" y2="378" stroke="#9aa5b1" stroke-width="1.6" marker-end="url(#a)"/>
+<text x="265.0" y="371.0" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" fill="#6b7785" font-weight="normal" text-anchor="middle">MCP</text>
+<rect x="532" y="348" width="176" height="62" rx="7" fill="#fff" stroke="#ff9900" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="620.0" y="376.0" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="12.5" fill="#1c2530" font-weight="600" text-anchor="middle">VPC Lattice</text>
+<text x="620.0" y="393.0" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="middle">resource gateway ENIs</text>
+<line x1="478" y1="378" x2="532" y2="378" stroke="#9aa5b1" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="762" y="340" width="186" height="78" rx="7" fill="#fff" stroke="#e4002b" stroke-width="2" stroke-dasharray="5 4"/>
+<text x="855.0" y="376.0" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="12.5" fill="#1c2530" font-weight="600" text-anchor="middle">F5 BNK  (TMM)</text>
+<text x="855.0" y="393.0" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="middle">network + workload policy</text>
+<line x1="708" y1="378" x2="762" y2="378" stroke="#9aa5b1" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="998" y="350" width="132" height="58" rx="7" fill="#fff" stroke="#9aa5b1" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="1064.0" y="383.0" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="12.5" fill="#1c2530" font-weight="600" text-anchor="middle">MCP tool pod</text>
+<line x1="948" y1="378" x2="998" y2="378" stroke="#9aa5b1" stroke-width="1.6" marker-end="url(#a)"/>
+<text x="70" y="436" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="start">Two independent policy engines, different questions. Blocked on: no Gateway deployed, and a publicly trusted cert for the target.</text>
+<rect x="40" y="486" width="1100" height="200" rx="10" fill="#f6f8fa" stroke="#e3e8ee" stroke-width="1"/>
+<circle cx="62" cy="510" r="11" fill="#127c3f"/>
+<text x="62" y="514" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="12" fill="#fff" font-weight="700" text-anchor="middle">3</text>
+<text x="82" y="515" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="14" fill="#1c2530" font-weight="700" text-anchor="start">Stranger path</text>
+<text x="1126" y="515" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="11" fill="#6b7785" font-weight="600" text-anchor="end">runs today</text>
+<rect x="70" y="548" width="176" height="62" rx="7" fill="#fff" stroke="#6b7785" stroke-width="1.4"/>
+<text x="158.0" y="576.0" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="12.5" fill="#1c2530" font-weight="600" text-anchor="middle">Unmanaged caller</text>
+<text x="158.0" y="593.0" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="middle">another cloud · a script</text>
+<rect x="330" y="520" width="250" height="130" rx="7" fill="#fff" stroke="#e4002b" stroke-width="2"/>
+<text x="455" y="538" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="12.5" fill="#1c2530" font-weight="600" text-anchor="middle">F5 BNK  (TMM)</text>
+<text x="455" y="554" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="9.5" fill="#6b7785" font-weight="normal" text-anchor="middle">refused before the pod</text>
+<text x="348" y="576" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10.5" fill="#b4232c" font-weight="600" text-anchor="start">403  privileged tool</text>
+<text x="348" y="593" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10.5" fill="#b4232c" font-weight="600" text-anchor="start">429  rate limit exceeded</text>
+<text x="348" y="610" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10.5" fill="#b4232c" font-weight="600" text-anchor="start">---  non-VPC source rejected</text>
+<text x="348" y="627" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10.5" fill="#127c3f" font-weight="600" text-anchor="start">200  forecast → forwarded</text>
+<line x1="246" y1="585" x2="330" y2="585" stroke="#9aa5b1" stroke-width="1.6" marker-end="url(#a)"/>
+<text x="288.0" y="578.0" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" fill="#6b7785" font-weight="normal" text-anchor="middle">POST</text>
+<rect x="646" y="556" width="150" height="58" rx="7" fill="#fff" stroke="#9aa5b1" stroke-width="1.4"/>
+<text x="721.0" y="589.0" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="12.5" fill="#1c2530" font-weight="600" text-anchor="middle">MCP tool pod</text>
+<line x1="580" y1="585" x2="646" y2="585" stroke="#9aa5b1" stroke-width="1.6" marker-end="url(#a)"/>
+<text x="646" y="634" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10.5" fill="#b4232c" font-weight="600" text-anchor="start">401  no / wrong credential</text>
+<text x="646" y="649" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="9.5" fill="#6b7785" font-weight="normal" text-anchor="start">issued by the tool, not BNK</text>
+<text x="830" y="560" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="11" fill="#1c2530" font-weight="600" text-anchor="start">No AgentCore component is in</text>
+<text x="830" y="577" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="start">this path — no JWT check, no</text>
+<text x="830" y="592" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="start">Cedar, no guardrail. This is the</text>
+<text x="830" y="607" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="start">case a managed front door</text>
+<text x="830" y="622" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="10.5" fill="#6b7785" font-weight="normal" text-anchor="start">cannot cover.</text>
+<text x="40" y="744" font-family="-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif" font-size="10" fill="#6b7785" font-weight="normal" text-anchor="start">Verified live on bnk-agentcore-demo, ap-southeast-2. Dashed = not yet built.</text>
+</svg>

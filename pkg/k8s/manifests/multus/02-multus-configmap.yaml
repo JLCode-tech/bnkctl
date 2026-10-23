@@ -1,0 +1,57 @@
+# AUTHORED, NOT CAPTURED LIVE — the multus-daemon-config ConfigMap the DS
+# mounts at /etc/cni/net.d/multus.d/daemon-config.json (see
+# manifests/02-multus-ds.yaml volume "multus-daemon-config"). Minimal/safe
+# defaults: deliberately omits "readinessindicatorfile" (which must name
+# GKE's primary CNI conflist — e.g. Cilium's, for a DPv2 cluster — and is
+# version/cluster-specific) so Multus does not block startup waiting on a
+# file path we haven't verified. If Multus pods sit NotReady, check
+# `ls /etc/cni/net.d/` on a node and consider setting readinessindicatorfile
+# explicitly.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: multus-daemon-config
+  namespace: kube-system
+  labels:
+    app: multus
+    tier: node
+# binDir MUST be the path as it exists on the HOST, not inside this
+# container: chrootDir below makes multus chroot into the node's filesystem
+# before exec'ing a delegate CNI plugin. On GKE the CNI binaries live in
+# /home/kubernetes/bin (which is exactly what the DaemonSet's `cnibin`
+# volume hostPaths); /opt/cni/bin exists only as a container-side mount
+# alias and is absent on the node.
+#
+# With /opt/cni/bin here, every new pod sandbox on the cluster fails:
+#   plugin type="multus-shim" ... failed (add): ... error adding container
+#   to network "gke-pod-network": plugin type="cilium-cni" failed (add):
+#   fork/exec /opt/cni/bin/cilium-cni: no such file or directory
+# i.e. installing Multus breaks ALL pod creation cluster-wide, including
+# TMM's own pods.
+#
+# Provenance: the live bnk-hostdev cluster was configured with
+# /home/kubernetes/bin during the 2026-07-20 trial and works. This bundle was
+# hand-AUTHORED rather than captured from that cluster, and drifted to
+# /opt/cni/bin. That risk was flagged at the time — the 2026-07-20 handoff
+# lists "Multus bundle authored-not-captured" as an open ambiguity alongside
+# "seed is authored but NEVER executed end-to-end". The first end-to-end run
+# (2026-07-21, cluster bnk-scratch) confirmed it as a real defect.
+# reference/bash-seed/manifests/02-multus-configmap.yaml carries the same
+# authored value and is deliberately left untouched — it is the provenance
+# record of what was authored, not of what ran.
+data:
+  daemon-config.json: |
+    {
+      "chrootDir": "/hostroot",
+      "logToStderr": true,
+      "logLevel": "verbose",
+      "logFile": "/var/log/multus.log",
+      "binDir": "/home/kubernetes/bin",
+      "socketDir": "/host/run/multus/",
+      "cniVersion": "0.3.1",
+      "cniConfigDir": "/host/etc/cni/net.d",
+      "multusConfigFile": "auto",
+      "multusAutoconfigDir": "/host/etc/cni/net.d",
+      "forceCNIVersion": false,
+      "overrideNetworkName": false
+    }

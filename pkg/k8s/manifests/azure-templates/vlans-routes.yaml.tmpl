@@ -1,0 +1,139 @@
+apiVersion: k8s.f5net.com/v1
+kind: F5SPKVlan
+metadata:
+  name: external
+  namespace: f5-cne-system
+spec:
+  name: external
+  category: external
+  interfaces:
+  - "1.1"
+  internal: false
+  mtu: {{ .TmmMtu }}
+  prefixlen_v4: {{ .ExtPrefixLen }}
+  selfip_v4s:
+  - {{ .ExtSelfIP }}
+  tag: 0
+  auto_lasthop: AUTO_LASTHOP_DEFAULT
+  cmp_hash: DEFAULT
+  pod_hash: DISABLED
+  trunk_hash: src-dst-ipport
+  bonded: false
+  allowed_services:
+  - port: ""
+    protocol: "1"
+{{- if .IntSelfIP }}
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5SPKVlan
+metadata:
+  name: internal
+  namespace: f5-cne-system
+spec:
+  name: internal
+  interfaces:
+  - "1.2"
+  internal: true
+  mtu: {{ .TmmMtu }}
+  prefixlen_v4: {{ .IntPrefixLen }}
+  selfip_v4s:
+  - {{ .IntSelfIP }}
+  tag: 0
+  auto_lasthop: AUTO_LASTHOP_DEFAULT
+  cmp_hash: DEFAULT
+  pod_hash: DISABLED
+  trunk_hash: src-dst-ipport
+  bonded: false
+  allowed_services: []
+{{- end }}
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5SPKStaticRoute
+metadata:
+  name: route-ext-gw
+  namespace: f5-cne-system
+spec:
+  destination: {{ .ExtGwIP }}
+  prefixLen: 32
+  type: interface
+  interface: external
+{{- if .IntGwIP }}
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5SPKStaticRoute
+metadata:
+  name: route-int-gw
+  namespace: f5-cne-system
+spec:
+  destination: {{ .IntGwIP }}
+  prefixLen: 32
+  type: interface
+  interface: internal
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5SPKStaticRoute
+metadata:
+  name: route-cluster-svcs
+  namespace: f5-cne-system
+spec:
+  destination: {{ .ServiceCidrDest }}
+  prefixLen: {{ .ServiceCidrPrefix }}
+  gateway: {{ .IntGwIP }}
+  type: gateway
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5SPKStaticRoute
+metadata:
+  name: route-cluster-pods
+  namespace: f5-cne-system
+spec:
+  destination: {{ .PodCidrDest }}
+  prefixLen: {{ .PodCidrPrefix }}
+  gateway: {{ .IntGwIP }}
+  type: gateway
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5SPKStaticRoute
+metadata:
+  name: route-default-egress
+  namespace: f5-cne-system
+spec:
+  destination: 0.0.0.0
+  prefixLen: 0
+  gateway: {{ .IntGwIP }}
+  type: gateway
+{{- else }}
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5SPKStaticRoute
+metadata:
+  name: route-cluster-svcs
+  namespace: f5-cne-system
+spec:
+  destination: {{ .ServiceCidrDest }}
+  prefixLen: {{ .ServiceCidrPrefix }}
+  gateway: {{ .ExtGwIP }}
+  type: gateway
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5SPKStaticRoute
+metadata:
+  name: route-cluster-pods
+  namespace: f5-cne-system
+spec:
+  destination: {{ .PodCidrDest }}
+  prefixLen: {{ .PodCidrPrefix }}
+  gateway: {{ .ExtGwIP }}
+  type: gateway
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5SPKStaticRoute
+metadata:
+  name: route-default-egress
+  namespace: f5-cne-system
+spec:
+  destination: 0.0.0.0
+  prefixLen: 0
+  gateway: {{ .ExtGwIP }}
+  type: gateway
+{{- end }}

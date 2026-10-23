@@ -1,0 +1,32 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: scn-aitokens-gateway
+  namespace: {{.Namespace}}
+spec:
+  gatewayClassName: {{.GatewayClassName}}
+  addresses:
+  - type: IPAddress
+    value: {{.VIP}}
+  infrastructure:
+    parametersRef:
+      group: gateway.k8s.f5.com
+      kind: GatewaySettings
+      name: awsbnkctl-aitokens
+    annotations:
+      k8s.f5.com/ai-token-counting: |
+        token_counting=enabled,
+        user_id_source=api_key,
+        user_id_header=Authorization,
+        fallback_to_ip=true,
+        enforcement=enabled,
+        rate_limit_policy=per_user,
+        rate_limit_tokens=100000,
+        rate_limit_window=3600,
+        rate_limit_action=log_only
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces: {from: Same}

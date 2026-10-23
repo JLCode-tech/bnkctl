@@ -1,0 +1,69 @@
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: Infra
+metadata:
+  name: infra
+  namespace: f5-cne-system
+spec:
+  ipams:
+  - name: external-selfip
+    ipPools:
+    - rangeStart: "{{ .ExtSelfIP }}"
+      rangeEnd: "{{ .ExtSelfIP }}"
+{{- if .IntSelfIP }}
+  - name: internal-selfip
+    ipPools:
+    - rangeStart: "{{ .IntSelfIP }}"
+      rangeEnd: "{{ .IntSelfIP }}"
+{{- end }}
+  - name: listener-pool
+    ipPools:
+    - rangeStart: "{{ .ListenerStart }}"
+      rangeEnd: "{{ .ListenerEnd }}"
+  networkAttachments:
+  - name: external-attach
+    networkAttachmentDefinitions:
+    - name: tmm-ext
+{{- if .IntSelfIP }}
+  - name: internal-attach
+    networkAttachmentDefinitions:
+    - name: tmm-int
+{{- end }}
+  networks:
+  - name: external
+    type: vlan
+    vlan:
+      tag: 0
+      mtu: {{ .TmmMtu }}
+      networkAttachmentRef:
+        name: external-attach
+      ipamRefs:
+      - name: external-selfip
+{{- if .IntSelfIP }}
+  - name: internal
+    type: vlan
+    vlan:
+      tag: 0
+      mtu: {{ .TmmMtu }}
+      networkAttachmentRef:
+        name: internal-attach
+      ipamRefs:
+      - name: internal-selfip
+{{- end }}
+  egressDefaults:
+    networkRef:
+      name: {{ if .IntSelfIP }}internal{{ else }}external{{ end }}
+    port: 4789
+    subnet: 192.168.0.0/16
+  staticRoutes:
+  - name: route-cluster-pods
+    destinations:
+    - "{{ .PodCidrDest }}/{{ .PodCidrPrefix }}"
+    nextHop: {{ if .IntGwIP }}{{ .IntGwIP }}{{ else }}{{ .ExtGwIP }}{{ end }}
+  - name: route-cluster-svcs
+    destinations:
+    - "{{ .ServiceCidrDest }}/{{ .ServiceCidrPrefix }}"
+    nextHop: {{ if .IntGwIP }}{{ .IntGwIP }}{{ else }}{{ .ExtGwIP }}{{ end }}
+  - name: route-default-egress
+    destinations:
+    - "0.0.0.0/0"
+    nextHop: {{ if .IntGwIP }}{{ .IntGwIP }}{{ else }}{{ .ExtGwIP }}{{ end }}

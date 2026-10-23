@@ -1,0 +1,70 @@
+# The MCP finance tool the AgentCore agent calls through the BNK VIP.
+#
+# The `mcp-server-code` ConfigMap referenced below is NOT defined here — it is
+# generated from mcp-server.py by kustomization.yaml, which also rewrites this
+# reference to the hashed name. Apply the directory, not this file alone.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-financial-tool
+  labels:
+    app: mcp-financial-tool
+    app.kubernetes.io/part-of: bnk-agentcore-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-financial-tool
+  template:
+    metadata:
+      labels:
+        app: mcp-financial-tool
+    spec:
+      containers:
+      - name: mcp-server
+        image: python:3.11-slim
+        command:
+        - /bin/sh
+        - -c
+        args:
+        # Versions pinned: an unpinned install makes pod startup depend on
+        # whatever PyPI serves that day, which is not reproducible.
+        - >-
+          pip install --no-cache-dir -q
+          'fastmcp==3.4.7' 'uvicorn==0.52.3' 'starlette==1.6.0' 'httpx==0.28.1'
+          && exec python /app/mcp-server.py
+        envFrom:
+        - secretRef:
+            name: mcp-server-tokens
+        ports:
+        - containerPort: 8080
+          name: mcp
+        readinessProbe:
+          httpGet:
+            path: /.well-known/agent-card.json
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - mountPath: /app
+          name: code
+      volumes:
+      - name: code
+        configMap:
+          name: mcp-server-code
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-financial-tool
+  labels:
+    app: mcp-financial-tool
+    app.kubernetes.io/part-of: bnk-agentcore-demo
+spec:
+  selector:
+    app: mcp-financial-tool
+  ports:
+  - name: a2a
+    port: 80
+    protocol: TCP
+    targetPort: 8080

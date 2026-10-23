@@ -1,0 +1,6 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: f5-gateway-class
+spec:
+  controllerName: f5.com/f5-cne-system-f5-cne-controller

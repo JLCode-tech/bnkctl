@@ -1,0 +1,13 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: scn-grpc-route
+  namespace: {{.Namespace}}
+spec:
+  parentRefs:
+  - name: scn-grpc-gateway
+    sectionName: grpc-listener
+  rules:
+  - backendRefs:
+    - name: grpcbin-svc
+      port: 9000

@@ -1,0 +1,97 @@
+apiVersion: k8s.f5.com/v1
+kind: CNEInstance
+metadata:
+  name: instance
+  namespace: f5-cne-system
+spec:
+  product:
+    gatewayAPI: true
+    type: BNK
+  manifestVersion: "{{ .ManifestVersion }}"
+  wholeCluster: true
+  telemetry:
+    loggingSubsystem:
+      enabled: {{ if or .Telemetry .AIGateway }}true{{ else }}false{{ end }}
+    metricSubsystem:
+      enabled: {{ if .Telemetry }}true{{ else }}false{{ end }}
+{{- if .AIGateway }}
+  aiGateway:
+    enabled: true
+    aiMetrics: true
+{{- end }}
+  certificate:
+    clusterIssuer: ext-ca-cluster-issuer
+  deploymentSize: "{{ .DeploymentSize }}"
+  registry:
+    uri: {{ if .ImageRegistry }}{{ .ImageRegistry }}{{ else }}repo.f5.com{{ end }}
+    imagePullSecrets:
+      - name: far-secret
+    imagePullPolicy: Always
+{{- if .NetworkAttachments }}
+  networkAttachments:
+{{- range .NetworkAttachments }}
+    - {{ . }}
+{{- end }}
+{{- else }}
+  networkAttachments: []
+{{- end }}
+  dynamicRouting:
+    enabled: false
+  firewallACL:
+    enabled: false
+  pseudoCNI:
+    enabled: true
+  coreCollection:
+    enabled: true
+  intelligentLB:
+    enabled: true
+  tmmReplicas: 1
+  advanced:
+    coremon:
+      hostPath: true
+    envDiscovery:
+      runAfterSuccess: true
+      stopOnFail: true
+    demoMode:
+      enabled: true
+    maintenanceMode:
+      enabled: false
+    cneController:
+      env:
+        - name: TMM_DEFAULT_MTU
+          value: "{{ .TmmMtu }}"
+        - name: USE_GATEWAY_SETTINGS
+          value: "true"
+        - name: MAX_ACTIVE_TMM_REPLICAS
+          value: "32"
+    tmm:
+      resources:
+        limits:
+          cpu: "4"
+          memory: "12Gi"
+          hugepages-2Mi: "4Gi"
+        requests:
+          cpu: "1"
+          memory: "4Gi"
+          hugepages-2Mi: "4Gi"
+      env:
+        - name: TMM_CALICO_ROUTER
+          value: "default"
+        - name: TMM_DEFAULT_MTU
+          value: "{{ .TmmMtu }}"
+        - name: PAL_CPU_SET
+          value: "{{ if .PalCpuSet }}{{ .PalCpuSet }}{{ else }}0,2{{ end }}"
+        - name: ZEBOS_STATE
+          value: legacy
+        - name: TMM_GENERIC_SOCKET_DRIVER
+          value: "true"
+        - name: TMM_MAPRES_ADDL_VETHS_ON_DP
+          value: "TRUE"
+        - name: TMM_MAPRES_IFC_CLAIM_LIST
+          value: "{{ if .IntPCI }}net1,net2{{ else }}net1{{ end }}"
+{{- if .TmmK8sRoutes }}
+        - name: TMM_K8S_ROUTES
+          value: "{{ .TmmK8sRoutes }}"
+{{- end }}
+
+

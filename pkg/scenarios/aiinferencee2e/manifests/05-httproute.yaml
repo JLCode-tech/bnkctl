@@ -1,0 +1,78 @@
+{{- if .EPP}}
+# BNK 2.4: TMM consults the F5 Endpoint Picker for every request and routes to
+# the vLLM pod it picks (queue depth, KV-cache use, prompt-prefix affinity).
+apiVersion: inference.k8s.f5.com/v1alpha1
+kind: F5EPP
+metadata:
+  name: vllm-pool-epp
+  namespace: {{.Namespace}}
+spec:
+  poolRef:
+    name: vllm-pool
+  engine: vllm
+  # Matches --block-size on the model servers.
+  blockSize: 64
+  tokenizer:
+    name: {{.TokenizerModel}}
+---
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
+metadata:
+  name: vllm-pool
+  namespace: {{.Namespace}}
+spec:
+  selector:
+    matchLabels:
+      app: vllm
+  targetPorts:
+  - number: 8000
+  endpointPickerRef:
+    name: vllm-pool-epp
+    port:
+      number: 9002
+    failureMode: FailClose
+---
+# The F5 EPP looks the tokenizer up by the request's model, so map the served
+# name to the tokenizer's HF id (the model server answers to both).
+apiVersion: inference.networking.x-k8s.io/v1alpha2
+kind: InferenceModelRewrite
+metadata:
+  name: vllm-pool-tokenizer-model
+  namespace: {{.Namespace}}
+spec:
+  poolRef:
+    group: inference.networking.k8s.io
+    kind: InferencePool
+    name: vllm-pool
+  rules:
+  - matches:
+    - model:
+        type: Exact
+        value: {{if .Synthetic}}{{.Sim.ServedModelName}}{{else}}llama3{{end}}
+    targets:
+    - modelRewrite: {{.TokenizerModel}}
+---
+{{- end}}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: scn-aiinference-route
+  namespace: {{.Namespace}}
+spec:
+  parentRefs:
+  - name: scn-aiinference-gateway
+  hostnames:
+  - awsbnkctl-aiinference.local
+  rules:
+  - matches:
+    - path: {type: PathPrefix, value: /}
+    backendRefs:
+{{- if .EPP}}
+    - group: inference.networking.k8s.io
+      kind: InferencePool
+      name: vllm-pool
+      port: 8000
+{{- else}}
+    - name: vllm
+      port: 80
+{{- end}}

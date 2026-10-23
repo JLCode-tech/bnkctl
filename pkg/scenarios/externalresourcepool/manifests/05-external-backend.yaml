@@ -1,0 +1,31 @@
+# Documented BNK 2.3 way to load-balance to an *external* (off-cluster)
+# resource: a selectorless Service plus a manually-managed EndpointSlice whose
+# endpoint is the external IP (how-to #10). BNK 2.3 has NO Pool CRD.
+#
+# The Service has no selector, so Kubernetes does not auto-populate its
+# EndpointSlice; we supply one ourselves pointing at the jumphost BNK_EXT ENI IP
+# ({{.BackendIP}}), which sits on the VIP's L2 and is directly TMM-reachable.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ext-backend
+  namespace: {{.Namespace}}
+spec:
+  ports:
+  - {name: http, port: 8080, targetPort: 8080}
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: ext-backend-1
+  namespace: {{.Namespace}}
+  labels:
+    kubernetes.io/service-name: ext-backend
+addressType: IPv4
+endpoints:
+- addresses:
+  - {{.BackendIP}}
+  conditions:
+    ready: true
+ports:
+- {name: http, port: 8080}

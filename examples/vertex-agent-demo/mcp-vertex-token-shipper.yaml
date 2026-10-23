@@ -1,0 +1,154 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vertex-token-shipper-code
+  namespace: llm-egress
+data:
+  shipper.py: |
+    #!/usr/bin/env python3
+    """Ship Vertex AI Reasoning Engine / Gemini 2.5 Pro model-invocation token counts into Loki.
+
+    Rewrites model invocation records into the schema BNK Forge's LLM Observability
+    panel reads, so the model reasoning leg and the BNK-governed tool leg appear
+    in one unified view.
+    """
+    import json
+    import os
+    import time
+    import urllib.error
+    import urllib.request
+    from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+    import threading
+
+    LOKI_URL = os.environ.get("LOKI_URL", "http://loki:3100/loki/api/v1/push")
+    PORT = int(os.environ.get("PORT", "9090"))
+    PRICE_IN_PER_1K = float(os.environ.get("PRICE_IN_PER_1K", "0.00125"))   # Gemini 2.5 Pro list price
+    PRICE_OUT_PER_1K = float(os.environ.get("PRICE_OUT_PER_1K", "0.005"))
+
+    def push_to_loki(records):
+        if not records:
+            return
+        streams = []
+        for r in records:
+            ts_ns = str(int(r.get("timestamp", time.time()) * 1e9))
+            model = r.get("model", "gemini-2.5-pro")
+            status = str(r.get("status", "200"))
+            payload_json = json.dumps(r)
+            streams.append({
+                "stream": {
+                    "job": "llm-gateway",
+                    "model": model,
+                    "status": status,
+                },
+                "values": [[ts_ns, payload_json]]
+            })
+        
+        body = json.dumps({"streams": streams}).encode("utf-8")
+        req = urllib.request.Request(
+            LOKI_URL,
+            data=body,
+            headers={"Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                pass
+        except Exception as e:
+            print(f"Error pushing to Loki: {e}")
+
+    class MetricsHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            data = self.rfile.read(length)
+            try:
+                record = json.loads(data.decode("utf-8"))
+                # Calculate cost
+                prompt_tk = record.get("prompt_tk", 0)
+                comp_tk = record.get("comp_tk", 0)
+                cost = (prompt_tk / 1000.0 * PRICE_IN_PER_1K) + (comp_tk / 1000.0 * PRICE_OUT_PER_1K)
+                record["cost"] = round(cost, 6)
+                record["total_tk"] = prompt_tk + comp_tk
+                if "timestamp" not in record:
+                    record["timestamp"] = time.time()
+                push_to_loki([record])
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"status":"ok"}')
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode("utf-8"))
+
+        def do_GET(self):
+            if self.path == "/healthz":
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"ok")
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+    def run_server():
+        server = ThreadingHTTPServer(("0.0.0.0", PORT), MetricsHandler)
+        print(f"Vertex Token Shipper listening on :{PORT}")
+        server.serve_forever()
+
+    if __name__ == "__main__":
+        run_server()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vertex-token-shipper
+  namespace: llm-egress
+  labels:
+    app.kubernetes.io/name: vertex-token-shipper
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vertex-token-shipper
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vertex-token-shipper
+    spec:
+      containers:
+      - name: shipper
+        image: python:3.11-slim
+        command: ["python3", "/app/shipper.py"]
+        env:
+        - name: LOKI_URL
+          value: "http://loki:3100/loki/api/v1/push"
+        - name: PORT
+          value: "9090"
+        ports:
+        - containerPort: 9090
+          name: http
+        volumeMounts:
+        - name: code
+          mountPath: /app
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+      volumes:
+      - name: code
+        configMap:
+          name: vertex-token-shipper-code
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vertex-token-shipper
+  namespace: llm-egress
+spec:
+  selector:
+    app.kubernetes.io/name: vertex-token-shipper
+  ports:
+  - name: http
+    port: 9090
+    targetPort: 9090
+    protocol: TCP

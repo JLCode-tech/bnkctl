@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: egress-client
+  namespace: {{.Namespace}}
+  labels:
+    app: egress-client
+spec:
+  restartPolicy: Never
+  containers:
+  - name: curl
+    image: curlimages/curl:8.10.1
+    command: ["sleep", "3600"]
+    resources:
+      requests: {cpu: 10m, memory: 16Mi}
+      limits:   {cpu: 100m, memory: 64Mi}

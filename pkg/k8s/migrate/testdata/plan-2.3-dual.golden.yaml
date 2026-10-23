@@ -1,0 +1,225 @@
+# Infra f5-cne-system/infra
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: Infra
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: awsbnkctl
+  name: infra
+  namespace: f5-cne-system
+spec:
+  egressDefaults:
+    networkRef:
+      name: int-vlan
+    subnet: 192.168.0.0/16
+  ipams:
+  - ipPools:
+    - availabilityZone: ap-southeast-2a
+      rangeEnd: 10.0.10.254
+      rangeStart: 10.0.10.224
+    name: ext-vlan-selfip
+  - ipPools:
+    - availabilityZone: ap-southeast-2a
+      rangeEnd: 10.0.20.254
+      rangeStart: 10.0.20.224
+    name: int-vlan-selfip
+  - ipPools:
+    - availabilityZone: ap-southeast-2a
+      rangeEnd: 10.0.10.60
+      rangeStart: 10.0.10.60
+    - availabilityZone: ap-southeast-2a
+      rangeEnd: 10.0.10.61
+      rangeStart: 10.0.10.61
+    name: egress-snat-snat
+  - ipPools:
+    - availabilityZone: ap-southeast-2a
+      rangeEnd: 10.0.10.110
+      rangeStart: 10.0.10.100
+    name: http2-scenario-http2-vip-pool
+  - ipPools:
+    - availabilityZone: ap-southeast-2a
+      rangeEnd: 10.0.10.121
+      rangeStart: 10.0.10.121
+    name: default-bnk-agentcore-demo-gateway-static
+  networkAttachments:
+  - name: ext-vlan-attach
+    networkAttachmentDefinitions:
+    - name: external-netdevice
+  - name: int-vlan-attach
+    networkAttachmentDefinitions:
+    - name: internal-netdevice
+  networks:
+  - name: ext-vlan
+    type: vlan
+    vlan:
+      ipamRefs:
+      - name: ext-vlan-selfip
+      networkAttachmentRef:
+        name: ext-vlan-attach
+      tag: 0
+  - name: int-vlan
+    type: vlan
+    vlan:
+      ipamRefs:
+      - name: int-vlan-selfip
+      mtu: 9000
+      networkAttachmentRef:
+        name: int-vlan-attach
+      tag: 0
+  staticRoutes:
+  - destinations:
+    - 10.0.0.0/16
+    name: bnk-egress-demo-vpc
+    nextHop: 10.0.20.1
+  - destinations:
+    - 0.0.0.0/0
+    name: bnk-egress-demo-default
+    nextHop: 10.0.10.1
+---
+# GatewaySettings bnk-egress-demo/bnk-egress-demo
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: GatewaySettings
+metadata:
+  name: bnk-egress-demo
+  namespace: bnk-egress-demo
+spec:
+  egressConfigs:
+  - name: bnk-egress-demo
+    networkRef:
+      name: int-vlan
+    sourceNATConfig:
+      sourceNATPoolRef:
+        name: egress-snat
+      type: Pool
+  sourceNATPools:
+  - ipamRefs:
+    - name: egress-snat-snat
+    name: egress-snat
+---
+# GatewaySettings default/bnk-agentcore-demo-gateway
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: GatewaySettings
+metadata:
+  name: bnk-agentcore-demo-gateway
+  namespace: default
+spec:
+  ingressConfig:
+    defaultListenerNetwork:
+      ipamRefs:
+      - name: default-bnk-agentcore-demo-gateway-static
+      networkRefs:
+      - name: ext-vlan
+      sourceNATConfig:
+        type: Automap
+---
+# GatewaySettings http2-scenario/http2-gateway
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: GatewaySettings
+metadata:
+  name: http2-gateway
+  namespace: http2-scenario
+spec:
+  ingressConfig:
+    defaultListenerNetwork:
+      ipamRefs:
+      - name: http2-scenario-http2-vip-pool
+      networkRefs:
+      - name: ext-vlan
+      sourceNATConfig:
+        type: Automap
+---
+# Gateway default/bnk-agentcore-demo-gateway
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: bnk-agentcore-demo-gateway
+  namespace: default
+spec:
+  infrastructure:
+    parametersRef:
+      group: gateway.k8s.f5.com
+      kind: GatewaySettings
+      name: bnk-agentcore-demo-gateway
+---
+# Gateway http2-scenario/http2-gateway
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: http2-gateway
+  namespace: http2-scenario
+spec:
+  infrastructure:
+    parametersRef:
+      group: gateway.k8s.f5.com
+      kind: GatewaySettings
+      name: http2-gateway
+---
+# EgressGateway bnk-egress-demo/bnk-egress-demo
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: EgressGateway
+metadata:
+  name: bnk-egress-demo
+  namespace: bnk-egress-demo
+spec:
+  gatewayClassName: lab-gatewayclass
+  infrastructure:
+    parametersRef:
+      name: bnk-egress-demo
+      sectionName: bnk-egress-demo
+  sourceSelector:
+    namespaces:
+      matchNames:
+      - bnk-egress-demo
+    selectionMode: NamespaceSelector
+---
+# SecPolicy bnk-egress-demo/egress-demo-fw
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: SecPolicy
+metadata:
+  name: egress-demo-fw
+  namespace: bnk-egress-demo
+spec:
+  extensionRefs:
+  - group: k8s.f5net.com
+    kind: F5BigFwPolicy
+    name: egress-demo-fw
+  targetRefs:
+  - group: gateway.k8s.f5.com
+    kind: EgressGateway
+    name: bnk-egress-demo
+---
+# SecPolicy default/mcp-sec-policy
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: SecPolicy
+metadata:
+  name: mcp-sec-policy
+  namespace: default
+spec:
+  extensionRefs:
+  - group: k8s.f5net.com
+    kind: F5BigFwPolicy
+    name: mcp-firewall
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: bnk-agentcore-demo-gateway
+---
+# NetPolicy default/mcp-net-policy-http
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: NetPolicy
+metadata:
+  annotations:
+    note: keep
+  labels:
+    app: agentcore
+  name: mcp-net-policy-http
+  namespace: default
+spec:
+  extensionRefs:
+  - group: k8s.f5net.com
+    kind: F5BigCneIrule
+    name: mcp-rate-limit-irule
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: bnk-agentcore-demo-gateway
+    sectionName: http

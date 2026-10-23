@@ -1,0 +1,18 @@
+apiVersion: gateway.k8s.f5.com/v1
+kind: L4Route
+metadata:
+  name: scn-tcp-lb-route
+  namespace: {{.Namespace}}
+spec:
+  protocol: TCP
+  parentRefs:
+  - name: scn-tcp-lb-gateway
+    sectionName: tcp-listener
+  rules:
+  - backendRefs:
+    - name: tcp-lb-a
+      port: 80
+      weight: 70
+    - name: tcp-lb-b
+      port: 80
+      weight: 30

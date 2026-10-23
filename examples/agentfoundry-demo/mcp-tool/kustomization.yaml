@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- deployment.yaml
+
+configMapGenerator:
+- name: mcp-financial-tool-code
+  files:
+  - mcp-server.py
+
+secretGenerator:
+- name: mcp-tool-tokens
+  literals:
+  - agent-token=demo-agent-token-a7f3c1
+  - external-token=demo-external-token-4b9e2d

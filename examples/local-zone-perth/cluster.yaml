@@ -1,0 +1,59 @@
+apiVersion: awsbnkctl/v1
+kind: Cluster
+
+metadata:
+  name: lz-perth
+  region: ap-southeast-2
+  labels:
+    purpose: bnk-localzone-perth
+    environment: edge-lz
+
+pattern: host-device
+
+network:
+  vpcCidr: 10.100.0.0/16
+
+  azs:
+    - ap-southeast-2a
+    - ap-southeast-2b
+    - ap-southeast-2-per-1a
+
+  subnets:
+    public:
+      - cidr: 10.100.1.0/24
+        az: ap-southeast-2a
+      - cidr: 10.100.2.0/24
+        az: ap-southeast-2b
+      - cidr: 10.100.3.0/24
+        az: ap-southeast-2-per-1a
+
+    private:
+      - cidr: 10.100.11.0/24
+        az: ap-southeast-2a
+      - cidr: 10.100.12.0/24
+        az: ap-southeast-2b
+
+  dataPath:
+    external:
+      cidr: 10.100.10.0/24
+      az: ap-southeast-2-per-1a
+    internal:
+      cidr: 10.100.20.0/24
+      az: ap-southeast-2-per-1a
+
+  natGateways: 1
+
+cluster:
+  kubernetesVersion: "1.35"
+  nodeGroups:
+    - name: lz-workers
+      instanceType: m5.2xlarge
+      desiredSize: 3
+      minSize: 3
+      maxSize: 4
+      diskSize: 50
+
+bnk:
+  farArchive: ../../cne_pull_64.json
+  jwt: ../../license.jwt
+  bgp: false

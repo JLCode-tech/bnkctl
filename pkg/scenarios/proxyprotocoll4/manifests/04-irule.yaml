@@ -1,0 +1,16 @@
+apiVersion: k8s.f5net.com/v1
+kind: F5BigCneIrule
+metadata:
+  name: pp-prepend
+  namespace: {{.Namespace}}
+spec:
+  iRule: |
+    when CLIENT_ACCEPTED {
+        set client_ip [IP::client_addr]
+        set client_port [TCP::client_port]
+        set local_ip [IP::local_addr]
+        set local_port [TCP::local_port]
+    }
+    when SERVER_CONNECTED {
+        TCP::respond "PROXY TCP4 $client_ip $local_ip $client_port $local_port\r\n"
+    }

@@ -1,0 +1,167 @@
+apiVersion: k8s.f5.com/v1
+kind: CNEInstance
+metadata:
+  name: {{ .InstanceNameCR }}
+  namespace: {{ .InstanceNS }}
+  labels:
+    app.kubernetes.io/name: {{ .InstanceNameCR }}
+    app.kubernetes.io/managed-by: bnk-deploy
+    app.kubernetes.io/instance: {{ .LabName }}
+spec:
+  product:
+    gatewayAPI: true
+    type: BNK
+  manifestVersion: "{{ .ManifestVersion }}"
+  # wholeCluster: true means TMM is allowed to schedule on any worker node.
+  # The role=bnk label (Phase 16) targets the specific node; wholeCluster
+  # enables the CNEInstance to see all cluster namespaces.
+  # Note: watchNamespaces must be omitted when wholeCluster=true — the CRD
+  # CEL rule rejects that combination (semantically redundant).
+  wholeCluster: true
+  telemetry:
+    loggingSubsystem:
+      enabled: true
+    metricSubsystem:
+      enabled: true
+{{- if .AIGateway }}
+  aiGateway:
+    enabled: true
+    aiMetrics: {{ .AIMetrics }}
+{{- end }}
+  certificate:
+    clusterIssuer: {{ .CAIssuer }}
+  deploymentSize: "{{ .DeploymentSize }}"
+  storageClassName: {{ .StorageClassName }}
+  registry:
+    uri: repo.f5.com
+    imagePullSecrets:
+      - name: {{ .FARSecretName }}
+    imagePullPolicy: Always
+  networkAttachments:
+    - {{ .ExternalNAD }}
+{{- if .HasInternal }}
+    - {{ .InternalNAD }}
+{{- end }}
+  dynamicRouting:
+    enabled: true
+  firewallACL:
+    enabled: true
+  pseudoCNI:
+    enabled: true
+  coreCollection:
+    enabled: true
+  intelligentLB:
+    enabled: true
+{{- if .EPP }}
+  # F5 Endpoint Picker (BNK 2.4): reconcile F5EPP resources in any namespace.
+  eppNamespaces: ["All"]
+{{- end }}
+  tmmReplicas: 1
+  advanced:
+    coremon:
+      hostPath: true
+    # envDiscovery disabled on EKS: F5 checks expect DPU/SR-IOV (OVN annotations,
+    # VF interfaces, sriovdp-config CM, SRIOV CNI). None apply on AWS host-device.
+    # With enabled=true + stopOnFail=false the per-node EnvDiscoveryFailed conditions
+    # still propagated to CNEInstance.Available=False on BNK 2.3 images.
+    envDiscovery:
+      enabled: false
+    cneController:
+      env:
+        - name: TMM_DEFAULT_MTU
+          value: "{{ .TmmMtu }}"
+        - name: CLOUD_ENV
+          value: "true"
+        - name: CLOUD_PROVIDER
+          value: "aws"
+        - name: CLOUD_NETWORK_CONFIGMAP
+          value: "cloud-network-mapping"
+        - name: PLATFORM_TYPE
+          value: "AWS"
+        - name: CLOUD_VPC
+          value: "{{ .VPCID }}"
+        - name: CLOUD_REGION
+          value: "{{ .AWSRegion }}"
+        - name: CLOUD_HOST_DEVICE_NAME
+          value: "{{ .CloudHostDeviceName }}"
+        - name: CLOUD_HOST_DEVICE_TAG
+          value: "{{ .CloudHostDeviceTag }}"
+        # BNK 2.4: the controller only runs the Infra and GatewaySettings
+        # reconcilers when this flag is set (env default false; neither FLO
+        # 2.30 nor the f5ingress chart sets it). Without it the Infra CR stays
+        # "Waiting for controller" and Gateways get no listener context.
+        - name: USE_GATEWAY_SETTINGS
+          value: "true"
+        # FLO 2.30 renders the controller Deployment itself and drops the chart's
+        # MAX_ACTIVE_TMM_REPLICAS (f5ingress values.yaml controller.maxActiveReplicas,
+        # default 32, "Maximum number of active TMM"). Without it the 2.4 controller
+        # keeps every TMM in standby ("maxActiveDevices=0", live 2026-09-11) and no
+        # Gateway gets a device context or virtual server. Same value as the chart.
+        - name: MAX_ACTIVE_TMM_REPLICAS
+          value: "32"
+    demoMode:
+      enabled: false
+    maintenanceMode:
+      enabled: false
+    tmm:
+      resources:
+        limits:
+          cpu: "{{ .TmmCpu }}"
+          memory: "{{ .TmmMemory }}"
+          hugepages-2Mi: "{{ .TmmHugepages }}"
+        requests:
+          cpu: "{{ .TmmCpu }}"
+          memory: "{{ .TmmMemory }}"
+          hugepages-2Mi: "{{ .TmmHugepages }}"
+      env:
+        - name: TMM_CALICO_ROUTER
+          value: "default"
+        # BNK 2.4 keeps ZebOS as the routing container; F5's 2.4 examples set
+        # this explicitly, so the RoutingTemplate syntax stays ZebOS.
+        - name: ZEBOS_STATE
+          value: "legacy"
+        - name: TMM_DEFAULT_MTU
+          value: "{{ .TmmMtu }}"
+        - name: PAL_CPU_SET
+          value: "{{ .PalCpuSet }}"
+        - name: TMM_MAPRES_ADDL_VETHS_ON_DP
+          value: "TRUE"
+{{- if .ServiceCIDR }}
+        # TMM_K8S_ROUTES (the f5-tmm chart's add_k8s_routes): the Kubernetes
+        # networks TMM keeps reachable over eth0 once the Infra CR gives it a
+        # default route on the data plane. F5's pre-install hook derives them
+        # from kubeadm-config or the OpenShift Network CR; EKS has neither, so
+        # awsbnkctl passes the cluster's serviceIpv4Cidr (pods are VPC
+        # addresses and stay reachable through the vpc route). Without it the
+        # Infra default route takes DNS, dSSM (iRule table commands, persistence)
+        # and log forwarding off the cluster network inside the TMM pod.
+        - name: TMM_K8S_ROUTES
+          value: "{{ .ServiceCIDR }}"
+{{- end }}
+{{- if not .Sriov }}
+        # host-device binding: TMM drives the dataplane over a kernel generic
+        # socket on the Multus-delivered netdev. This is the SOCK driver and is
+        # MUTUALLY EXCLUSIVE with the vfio/DPDK driver — sriov-external omits it
+        # so TMM selects the DPDK driver against the device-plugin vfio resource.
+        - name: TMM_GENERIC_SOCKET_DRIVER
+          value: "true"
+{{- end }}
+        # ROBIN_VFIO_RESOURCE_N names which device-plugin resourceName backs the
+        # Nth dataplane interface. The suffix matches the sriov-dp resourceName,
+        # so the plugin's injected PCIDEVICE BDF env var is what TMM reads.
+        # host-device hardcodes the PCIDEVICE entries below; sriov lets the
+        # device plugin inject them (don't set the same var twice).
+        - name: ROBIN_VFIO_RESOURCE_1
+          value: "{{ .ExternalIFName }}"
+{{- if .HasInternal }}
+        - name: ROBIN_VFIO_RESOURCE_2
+          value: "{{ .InternalIFName }}"
+{{- end }}
+{{- if not .Sriov }}
+        - name: PCIDEVICE_INTEL_COM_{{ .ExternalIFUpper }}
+          value: "{{ .ExternalPCI }}"
+{{- end }}
+{{- if .HasInternal }}
+        - name: PCIDEVICE_INTEL_COM_{{ .InternalIFUpper }}
+          value: "{{ .InternalPCI }}"
+{{- end }}

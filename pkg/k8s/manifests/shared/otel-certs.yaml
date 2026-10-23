@@ -1,0 +1,81 @@
+# otel-certs.yaml — Go text/template (ported from aws-gpu-setup/manifests/otel-certs.yaml).
+# Applied to f5-cne-core namespace by Phase 15. Two cert-manager Certificate CRs
+# signed by the slice-5 CA issuer.
+#
+# Variables substituted at Phase 15 render time via render.OTELCertsVars:
+#   {{ .OTELSvrCert }}     — external-otelsvr
+#   {{ .OTELSvrSecret }}   — external-otelsvr-secret
+#   {{ .OTELF5IngCert }}   — external-f5ingotelsvr
+#   {{ .OTELF5IngSecret }} — external-f5ingotelsvr-secret
+#   {{ .OperatorNS }}      — f5-cne-core
+#   {{ .CAIssuer }}        — <cluster>-ca-cluster-issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .OTELSvrCert }}
+  namespace: {{ .OperatorNS }}
+  labels:
+    app.kubernetes.io/part-of: bnk
+spec:
+  secretName: {{ .OTELSvrSecret }}
+  commonName: {{ .OTELSvrCert }}.{{ .OperatorNS }}.svc
+  dnsNames:
+    - {{ .OTELSvrCert }}
+    - {{ .OTELSvrCert }}.{{ .OperatorNS }}
+    - {{ .OTELSvrCert }}.{{ .OperatorNS }}.svc
+    - {{ .OTELSvrCert }}.{{ .OperatorNS }}.svc.cluster.local
+  subject:
+    countries: [US]
+    provinces: [Washington]
+    localities: [Seattle]
+    organizations: [F5 Networks]
+    organizationalUnits: [PD]
+  emailAddresses: ["clientcert@f5net.com"]
+  duration: 8760h    # 1y (Tokyo-validated)
+  renewBefore: 720h  # 30d
+  issuerRef:
+    name: {{ .CAIssuer }}
+    kind: ClusterIssuer
+    group: cert-manager.io
+  privateKey:
+    rotationPolicy: Always
+    encoding: PKCS1
+    algorithm: RSA
+    size: 4096
+  revisionHistoryLimit: 10
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .OTELF5IngCert }}
+  namespace: {{ .OperatorNS }}
+  labels:
+    app.kubernetes.io/part-of: bnk
+spec:
+  secretName: {{ .OTELF5IngSecret }}
+  commonName: {{ .OTELF5IngCert }}.{{ .OperatorNS }}.svc
+  dnsNames:
+    - {{ .OTELF5IngCert }}
+    - {{ .OTELF5IngCert }}.{{ .OperatorNS }}
+    - {{ .OTELF5IngCert }}.{{ .OperatorNS }}.svc
+    - {{ .OTELF5IngCert }}.{{ .OperatorNS }}.svc.cluster.local
+  subject:
+    countries: [US]
+    provinces: [Washington]
+    localities: [Seattle]
+    organizations: [F5 Networks]
+    organizationalUnits: [PD]
+  emailAddresses: ["clientcert@f5net.com"]
+  duration: 8760h
+  renewBefore: 720h
+  issuerRef:
+    name: {{ .CAIssuer }}
+    kind: ClusterIssuer
+    group: cert-manager.io
+  privateKey:
+    rotationPolicy: Always
+    encoding: PKCS1
+    algorithm: RSA
+    size: 4096
+  revisionHistoryLimit: 10

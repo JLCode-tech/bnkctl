@@ -1,0 +1,364 @@
+# ==============================================================================
+# F5 BIG-IP Next for Kubernetes (BNK) 2.4.1 — LLM Gateway Manifest (GCP GKE)
+# ==============================================================================
+# Authentic 7-step BNK 2.4.1 LLM Gateway configuration for Vertex AI Gemini:
+#   Step 1: AITenant (cluster-scoped, inference.k8s.f5.com/v1alpha1)
+#   Step 2: Secret + AICredential + AIProvider (f5-cne-system, vendor: Gemini)
+#   Step 3: AIModel with weighted primary/fallback deployments & pricing (f5-cne-system)
+#   Step 4: 4-Object Route Bundle in f5-cne-system:
+#           Gateway + HTTPRoute (no backendRefs) + AIGatewayProfile + AppPolicy
+#   Step 5: TMM Egress & DNS in f5-cne-system:
+#           Provisioned by bnkctl (Infra/infra default route + F5BigDnsCache/aigw-dns-resolver)
+#   Step 6: CNE Controller restart check (performed by scripts/setup-llm-gateway.sh)
+#   Step 7: DSSM Governance bootstrap & f5vk_ virtual key (scripts/setup-llm-gateway.sh)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Step 1: AITenant (Cluster-Scoped)
+# ------------------------------------------------------------------------------
+apiVersion: inference.k8s.f5.com/v1alpha1
+kind: AITenant
+metadata:
+  name: default-tenant
+  labels:
+    app.kubernetes.io/part-of: bnk-vertex-demo
+    f5.com/bnk-release: "2.4.1"
+spec:
+  displayName: "Default AI Tenant"
+---
+# ------------------------------------------------------------------------------
+# Step 2: Provider Credentials & AIProvider (Primary + Fallback in f5-cne-system)
+# ------------------------------------------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vertex-gemini-primary-api-key
+  namespace: f5-cne-system
+type: Opaque
+stringData:
+  api-key: "replace-with-vertex-gemini-primary-api-key"
+---
+apiVersion: inference.k8s.f5.com/v1alpha1
+kind: AICredential
+metadata:
+  name: vertex-gemini-primary-cred
+  namespace: f5-cne-system
+spec:
+  tenantRef:
+    name: default-tenant
+  secretRef:
+    name: vertex-gemini-primary-api-key
+    key: api-key
+---
+apiVersion: inference.k8s.f5.com/v1alpha1
+kind: AIProvider
+metadata:
+  name: vertex-gemini-australia-southeast1
+  namespace: f5-cne-system
+  labels:
+    app.kubernetes.io/part-of: bnk-vertex-demo
+    f5.com/provider-tier: primary
+spec:
+  tenantRef:
+    name: default-tenant
+  type: Gemini
+  vendor: Gemini
+  endpointURL: "https://australia-southeast1-aiplatform.googleapis.com/v1beta1/projects/YOUR_GCP_PROJECT_ID/locations/australia-southeast1/endpoints/openapi"
+  gemini:
+    baseURL: "https://australia-southeast1-aiplatform.googleapis.com/v1beta1/projects/YOUR_GCP_PROJECT_ID/locations/australia-southeast1/endpoints/openapi"
+  credentialRef:
+    name: vertex-gemini-primary-cred
+  enabled: true
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vertex-gemini-fallback-api-key
+  namespace: f5-cne-system
+type: Opaque
+stringData:
+  api-key: "replace-with-vertex-gemini-fallback-api-key"
+---
+apiVersion: inference.k8s.f5.com/v1alpha1
+kind: AICredential
+metadata:
+  name: vertex-gemini-fallback-cred
+  namespace: f5-cne-system
+spec:
+  tenantRef:
+    name: default-tenant
+  secretRef:
+    name: vertex-gemini-fallback-api-key
+    key: api-key
+---
+apiVersion: inference.k8s.f5.com/v1alpha1
+kind: AIProvider
+metadata:
+  name: vertex-gemini-us-central1-fallback
+  namespace: f5-cne-system
+  labels:
+    app.kubernetes.io/part-of: bnk-vertex-demo
+    f5.com/provider-tier: fallback
+spec:
+  tenantRef:
+    name: default-tenant
+  type: Gemini
+  vendor: Gemini
+  endpointURL: "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/YOUR_GCP_PROJECT_ID/locations/us-central1/endpoints/openapi"
+  gemini:
+    baseURL: "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/YOUR_GCP_PROJECT_ID/locations/us-central1/endpoints/openapi"
+  credentialRef:
+    name: vertex-gemini-fallback-cred
+  enabled: true
+---
+# ------------------------------------------------------------------------------
+# Step 3: AIModel Definitions (Weighted Primary + Fallback Deployments in f5-cne-system)
+# ------------------------------------------------------------------------------
+apiVersion: inference.k8s.f5.com/v1alpha1
+kind: AIModel
+metadata:
+  name: gemini-2-5-pro
+  namespace: f5-cne-system
+  labels:
+    app.kubernetes.io/part-of: bnk-vertex-demo
+spec:
+  tenantRef:
+    name: default-tenant
+  name: gemini-2-5-pro
+  deployments:
+    - name: primary
+      providerRef:
+        name: vertex-gemini-australia-southeast1
+      upstream: google/gemini-2.5-pro
+      dialects: ["OpenAIChat"]
+      weight: 80
+      state: Active
+      pricing:
+        inputPerMtok: 1250000
+        outputPerMtok: 5000000
+    - name: fallback
+      providerRef:
+        name: vertex-gemini-us-central1-fallback
+      upstream: google/gemini-2.5-flash
+      dialects: ["OpenAIChat"]
+      weight: 20
+      state: Active
+      pricing:
+        inputPerMtok: 150000
+        outputPerMtok: 600000
+---
+apiVersion: inference.k8s.f5.com/v1alpha1
+kind: AIModel
+metadata:
+  name: gpt-4o-mini
+  namespace: f5-cne-system
+  labels:
+    app.kubernetes.io/part-of: bnk-vertex-demo
+spec:
+  tenantRef:
+    name: default-tenant
+  name: gpt-4o-mini
+  deployments:
+    - name: primary
+      providerRef:
+        name: vertex-gemini-australia-southeast1
+      upstream: google/gemini-2.5-pro
+      dialects: ["OpenAIChat"]
+      weight: 80
+      state: Active
+      pricing:
+        inputPerMtok: 1250000
+        outputPerMtok: 5000000
+    - name: fallback
+      providerRef:
+        name: vertex-gemini-us-central1-fallback
+      upstream: google/gemini-2.5-flash
+      dialects: ["OpenAIChat"]
+      weight: 20
+      state: Active
+      pricing:
+        inputPerMtok: 150000
+        outputPerMtok: 600000
+---
+# ------------------------------------------------------------------------------
+# Step 4: 4-Object Route Bundle (Gateway + HTTPRoute + AIGatewayProfile + AppPolicy)
+# ------------------------------------------------------------------------------
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: f5-gateway-class
+spec:
+  controllerName: f5.com/f5-cne-system-f5-cne-controller
+  description: F5 BIG-IP Next for Kubernetes 2.4.1 LLM GatewayClass
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: llm-chat-route-gw
+  namespace: f5-cne-system
+  labels:
+    app.kubernetes.io/part-of: bnk-vertex-demo
+spec:
+  gatewayClassName: f5-gateway-class
+  infrastructure:
+    parametersRef:
+      group: gateway.k8s.f5.com
+      kind: GatewaySettings
+      name: bnk-gateway-settings
+  addresses:
+    - type: IPAddress
+      value: "10.10.1.11"
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 8080
+      allowedRoutes:
+        kinds:
+          - kind: HTTPRoute
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: llm-chat-route-route
+  namespace: f5-cne-system
+  labels:
+    app.kubernetes.io/part-of: bnk-vertex-demo
+spec:
+  parentRefs:
+    - name: llm-chat-route-gw
+      sectionName: http
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v1
+      timeouts:
+        request: 300s
+        backendRequest: 300s
+---
+# vLLM Semantic Router workload Service + cross-namespace ExternalName Service (Manual Section 4.5.5)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vllm-semantic-router-system
+  labels:
+    app.kubernetes.io/part-of: bnk-vertex-demo
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vsr-service
+  namespace: vllm-semantic-router-system
+  labels:
+    app.kubernetes.io/name: vllm-semantic-router
+    app.kubernetes.io/part-of: bnk-vertex-demo
+spec:
+  selector:
+    app.kubernetes.io/name: vllm-semantic-router
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllmsr
+  namespace: f5-cne-system
+  labels:
+    app.kubernetes.io/part-of: bnk-vertex-demo
+    app.kubernetes.io/component: semantic-router-bridge
+spec:
+  type: ExternalName
+  externalName: vsr-service.vllm-semantic-router-system.svc.cluster.local
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+---
+apiVersion: inference.k8s.f5.com/v1alpha1
+kind: AIGatewayProfile
+metadata:
+  name: llm-chat-route
+  namespace: f5-cne-system
+  labels:
+    app.kubernetes.io/part-of: bnk-vertex-demo
+  annotations:
+    inference.k8s.f5.com/semantic_cache_pool_max_size: "64"
+    inference.k8s.f5.com/semantic_cache_pool_idle_timeout: "300s"
+    semantic_cache_pool_max_size: "64"
+    semantic_cache_pool_idle_timeout: "300s"
+spec:
+  tenantRef:
+    name: default-tenant
+  auth:
+    virtualKeys:
+      required: true
+  modelRouting:
+    semanticRouter:
+      serviceRef:
+        name: vllmsr
+        port: 8000
+      timeout: 5s
+  failover:
+    on429: true
+    on5xx: true
+    maxAttempts: 2
+    cooldown: 30s
+    honorRetryAfter: true
+  promptCache: {}
+  providers:
+    - name: vertex-gemini-australia-southeast1
+      credentialRef:
+        name: vertex-gemini-primary-cred
+    - name: vertex-gemini-us-central1-fallback
+      credentialRef:
+        name: vertex-gemini-fallback-cred
+---
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: AppPolicy
+metadata:
+  name: llm-chat-route-apppolicy
+  namespace: f5-cne-system
+  labels:
+    app.kubernetes.io/part-of: bnk-vertex-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: llm-chat-route-gw
+      sectionName: http
+  extensionRefs:
+    - group: inference.k8s.f5.com
+      kind: AIGatewayProfile
+      name: llm-chat-route
+---
+# ------------------------------------------------------------------------------
+# Step 5: TMM DNS Resolver in f5-cne-system (F5BigDnsCache/aigw-dns-resolver)
+# Forwards root zone ("") queries to cluster DNS and 8.8.8.8 / 1.1.1.1
+# ------------------------------------------------------------------------------
+apiVersion: k8s.f5net.com/v1
+kind: F5BigDnsCache
+metadata:
+  name: aigw-dns-resolver
+  namespace: f5-cne-system
+  labels:
+    app.kubernetes.io/part-of: bnk-vertex-demo
+spec:
+  cacheType: net-resolver
+  netResolver:
+    useIpv4: true
+    useIpv6: false
+    forwardZones:
+      - forwardZone: "."
+        nameServers:
+          - ipAddress: 10.96.0.10
+            port: 53
+          - ipAddress: 8.8.8.8
+            port: 53
+          - ipAddress: 1.1.1.1
+            port: 53
+
+

@@ -1,0 +1,91 @@
+# Rendered by internal/k8s/render.RenderCNEInstance from cluster.yaml +
+# Phase25-discovered state (docs/SPEC-go-tracer.md §5 per-file mapping).
+# Converted from reference/bash-seed/manifests/05-cneinstance.yaml.tmpl
+# (${VAR} envsubst) to Go text/template placeholders.
+#
+# advanced.tmm.env carries the mandatory host-device env
+# (reference/TRIAL-NOTES.md contract item 3):
+#   TMM_MAPRES_ADDL_VETHS_ON_DP=TRUE
+#   PCIDEVICE_INTEL_COM_EXT / PCIDEVICE_INTEL_COM_INT — mapres SKIPS an
+#   interface without a PCIDEVICE_* env ref ("Environment variable
+#   reference is required"); TMM_MAPRES_IFC_CLAIM_LIST alone does NOT work.
+apiVersion: k8s.f5.com/v1
+kind: CNEInstance
+metadata:
+  name: instance
+  namespace: f5-cne-system
+spec:
+  advanced:
+    cneController:
+      env:
+      - name: TMM_DEFAULT_MTU
+        value: "1460"
+    demoMode:
+      enabled: true
+    # envDiscovery must NOT be disabled. It is the step that injects the TMM
+    # pod's identity env (NAMESPACE/NODE/CONTAINER_IMAGE_VERSION); with it off,
+    # TMM's crashagent hard-dies —
+    #   crashagent: required environment variable is missing: NAMESPACE / NODE /
+    #   CONTAINER_IMAGE_VERSION; adding watch to /var/crash: no such file →
+    #   terminating main thread
+    # — and TMM never becomes Ready (live-hit 2026-07-21, cluster bnk-scratch3).
+    # The proven bnk-hostdev CNEInstance leaves `enabled` unset (default on);
+    # match it. runAfterSuccess/stopOnFail are kept as on bnk-hostdev.
+    envDiscovery:
+      runAfterSuccess: true
+      stopOnFail: true
+    maintenanceMode:
+      enabled: false
+    tmm:
+      env:
+      - name: TMM_DEFAULT_MTU
+        value: "1460"
+      - name: ZEBOS_STATE
+        value: legacy
+      - name: TMM_GENERIC_SOCKET_DRIVER
+        value: "true"
+      - name: TMM_MAPRES_ADDL_VETHS_ON_DP
+        value: "TRUE"
+      # Present in the proven bnk-hostdev CNEInstance alongside the PCIDEVICE_*
+      # refs (not instead of them — see the header note); match it.
+      - name: TMM_MAPRES_IFC_CLAIM_LIST
+        value: net1,net2
+      - name: PCIDEVICE_INTEL_COM_EXT
+        value: "0000:00:05.0"
+      - name: PCIDEVICE_INTEL_COM_INT
+        value: "0000:00:06.0"
+  certificate:
+    clusterIssuer: ext-ca-cluster-issuer
+  # coreCollection left at its default (empty), NOT `enabled: false`. On the
+  # proven bnk-hostdev CNEInstance this is `{}`; explicitly setting
+  # `enabled: false` is what put TMM's crashagent on the path where it watches a
+  # /var/crash that was never provisioned and terminates the main thread
+  # (live-hit 2026-07-21, cluster bnk-scratch3). Match bnk-hostdev.
+  coreCollection: {}
+  deploymentSize: Small
+  dpu:
+    enabled: false
+  dynamicRouting:
+    enabled: false
+  firewallACL:
+    enabled: false
+  manifestVersion: "2.4.0-3.2882.0"
+  networkAttachments:
+  - tmm-ext
+  - tmm-int
+  product:
+    gatewayAPI: true
+    type: BNK
+  pseudoCNI:
+    enabled: true
+  registry:
+    imagePullPolicy: Always
+    imagePullSecrets:
+    - name: far-secret
+    uri: us-west1-docker.pkg.dev/f5-gcs-7056-ptg-cne-prod/spk-repo-non-ga
+  telemetry:
+    loggingSubsystem:
+      enabled: false
+    metricSubsystem:
+      enabled: false
+  wholeCluster: true

@@ -1,0 +1,20 @@
+# gitleaks configuration for bnkctl.
+# CI runs gitleaks via the security-audit job in .github/workflows/ci.yml.
+# This file extends the default ruleset and allowlists known false positives.
+title = "bnkctl gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = """
+Test fixtures, demo README curl examples, and synthetic traffic-generator virtual keys
+(f5vk_... / demo-external-token-...) contain synthetic placeholder tokens and keys
+(no real credentials).
+"""
+paths = [
+  '''pkg/jwt/jwt_test\.go''',
+  '''internal/providers/aws/client_test\.go''',
+  '''examples/.*/README\.md''',
+  '''examples/.*/traffic-generator-deployment\.yaml''',
+]

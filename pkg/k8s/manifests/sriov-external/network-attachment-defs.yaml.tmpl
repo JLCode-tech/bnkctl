@@ -1,0 +1,29 @@
+# sriov NetworkAttachmentDefinition (sriov-external pattern).
+#
+# The k8s.v1.cni.cncf.io/resourceName annotation couples this NAD to the
+# sriov-network-device-plugin resource (intel.com/ens8): when TMM's CNEInstance
+# lists this NAD in networkAttachments, the cne-controller adds an
+# intel.com/ens8 resource request to the TMM pod + this network annotation;
+# the device plugin then allocates the vfio-bound ENA and injects
+# PCIDEVICE_INTEL_COM_ENS8 + the /dev/vfio mounts. TMM opens the vfio device via
+# DPDK (proven live: HTTP 200 through TMM on the vfio ENA, 2026-06-05).
+#
+# type MUST be "passthru" (a no-op CNI), NOT "sriov": sriov-cni demands a VF
+# parent (.../physfn/net) which a whole ENA bound to vfio does not have, so
+# type: sriov fails sandbox creation. passthru satisfies Multus without touching
+# the device — the device-plugin resource allocation does all the work.
+# Applied in {{ .Namespace }} (and default, mirroring the host-device NADs).
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: {{ .ExternalNADName }}
+  namespace: {{ .Namespace }}
+  annotations:
+    k8s.v1.cni.cncf.io/resourceName: intel.com/ens8
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "name": "external-sriov",
+      "type": "passthru"
+    }

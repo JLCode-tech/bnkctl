@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grpcbin-backend
+  namespace: {{.Namespace}}
+  labels:
+    app: grpcbin-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grpcbin-backend
+  template:
+    metadata:
+      labels:
+        app: grpcbin-backend
+    spec:
+      containers:
+      - name: grpcbin
+        image: kong/grpcbin:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: grpc
+          containerPort: 9000
+        - name: grpc-insecure
+          containerPort: 9001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grpcbin-svc
+  namespace: {{.Namespace}}
+spec:
+  selector:
+    app: grpcbin-backend
+  ports:
+  - name: grpc
+    port: 9000
+    targetPort: 9000
+    appProtocol: kubernetes.io/h2c

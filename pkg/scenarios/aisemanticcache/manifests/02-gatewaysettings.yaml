@@ -1,0 +1,16 @@
+# GatewaySettings gives the Gateway its listener context on BNK 2.4: VIPs come
+# from the Infra listener pool and the external VLAN Phase 23b defined.
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: GatewaySettings
+metadata:
+  name: awsbnkctl-aisemcache
+  namespace: {{.Namespace}}
+spec:
+  ingressConfig:
+    defaultListenerNetwork:
+      ipamRefs:
+      - name: listener-pool
+      networkRefs:
+      - name: ext-vlan-infra
+      sourceNATConfig:
+        type: Automap

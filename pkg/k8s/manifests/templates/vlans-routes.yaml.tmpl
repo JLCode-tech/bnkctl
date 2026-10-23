@@ -1,0 +1,124 @@
+# Rendered by internal/k8s/render.RenderVlansRoutes from cluster.yaml +
+# Phase25-discovered state + intent-derived route-CIDR splits
+# (docs/SPEC-go-tracer.md §5 per-file mapping). Converted from
+# reference/bash-seed/manifests/06-vlans-routes.yaml.tmpl (${VAR} envsubst)
+# to Go text/template placeholders.
+#
+# Static routes are the full proven contract (reference/TRIAL-NOTES.md item 7)
+# — in particular route-int-gw, which the earlier reference/install captures
+# were MISSING ("REQUIRED for default-egress gw resolution — missing on
+# reference, egress never worked there so nobody noticed"). Do not drop it.
+apiVersion: k8s.f5net.com/v1
+kind: F5SPKVlan
+metadata:
+  name: external
+  namespace: f5-cne-system
+spec:
+  name: external
+  category: external
+  interfaces:
+  - "1.1"
+  internal: false
+  mtu: {{ .TmmMtu }}
+  prefixlen_v4: {{ .ExtUnderlayPrefixLen }}
+  selfip_v4s:
+  - {{ .ExtSelfIP }}
+  tag: 0
+  auto_lasthop: AUTO_LASTHOP_DEFAULT
+  cmp_hash: DEFAULT
+  pod_hash: DISABLED
+  trunk_hash: src-dst-ipport
+  bonded: false
+  allowed_services:
+  - port: ""
+    protocol: "1"
+  - port: "{{ .VxlanPort }}"
+    protocol: udp
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5SPKVlan
+metadata:
+  name: internal
+  namespace: f5-cne-system
+spec:
+  name: internal
+  interfaces:
+  - "1.2"
+  internal: true
+  mtu: {{ .TmmMtu }}
+  prefixlen_v4: 16
+  selfip_v4s:
+  - {{ .IntSelfIP }}
+  tag: 0
+  auto_lasthop: AUTO_LASTHOP_DEFAULT
+  cmp_hash: DEFAULT
+  pod_hash: DISABLED
+  trunk_hash: src-dst-ipport
+  bonded: false
+  allowed_services: []
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5SPKStaticRoute
+metadata:
+  name: route-ext-gw
+  namespace: f5-cne-system
+spec:
+  destination: {{ .ExtGwIP }}
+  prefixLen: 32
+  type: interface
+  interface: external
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5SPKStaticRoute
+metadata:
+  name: route-int-gw
+  namespace: f5-cne-system
+spec:
+  destination: {{ .IntGwIP }}
+  prefixLen: 32
+  type: interface
+  interface: internal
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5SPKStaticRoute
+metadata:
+  name: route-ext-underlay
+  namespace: f5-cne-system
+spec:
+  destination: {{ .ExtUnderlayDest }}
+  prefixLen: {{ .ExtUnderlayPrefixLen }}
+  gateway: {{ .ExtGwIP }}
+  type: gateway
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5SPKStaticRoute
+metadata:
+  name: route-cluster-pods
+  namespace: f5-cne-system
+spec:
+  destination: {{ .MainPodsDest }}
+  prefixLen: {{ .MainPodsPrefixLen }}
+  gateway: {{ .TmmPodGW }}
+  type: gateway
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5SPKStaticRoute
+metadata:
+  name: route-cluster-svcs
+  namespace: f5-cne-system
+spec:
+  destination: {{ .MainSvcsDest }}
+  prefixLen: {{ .MainSvcsPrefixLen }}
+  gateway: {{ .TmmPodGW }}
+  type: gateway
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5SPKStaticRoute
+metadata:
+  name: route-default-egress
+  namespace: f5-cne-system
+spec:
+  destination: 0.0.0.0
+  prefixLen: 0
+  gateway: {{ .IntGwIP }}
+  type: gateway

@@ -1,0 +1,23 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: scn-aisemcache-gateway
+  namespace: {{.Namespace}}
+spec:
+  gatewayClassName: {{.GatewayClassName}}
+  addresses:
+  - type: IPAddress
+    value: {{.VIP}}
+  infrastructure:
+    parametersRef:
+      group: gateway.k8s.f5.com
+      kind: GatewaySettings
+      name: awsbnkctl-aisemcache
+    annotations:
+      k8s.f5.com/ai: "semantic_cache=enabled,semantic_cache_ip_port=127.0.0.1:80,semantic_cache_recv_timeout=1000"
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces: {from: Same}

@@ -1,0 +1,147 @@
+releases:
+  "2.3.0-3.2598.3-0.0.170":
+    floChartVersion: "v2.21.13-0.0.28"
+    networkModel: "legacy-spk"
+    servedGatewayAPIVersion: "gateway.k8s.f5.com/v1alpha1"
+    servedInferenceAPIVersion: "inference.networking.x-k8s.io/v1alpha2"
+    quirks:
+      endpointSliceGetRBAC: false
+      endpointSliceWeightResync: false
+      recreateCNEControllerOnNull: false
+      podManagerHeal: true
+      dssmInsecureOverlay: true
+      multusTokenWatch: true
+      cpclKeySync: true
+  "2.3.0-3.2598.3-0.0.171":
+    floChartVersion: "v2.21.13-0.0.28"
+    networkModel: "legacy-spk"
+    servedGatewayAPIVersion: "gateway.k8s.f5.com/v1alpha1"
+    servedInferenceAPIVersion: "inference.networking.x-k8s.io/v1alpha2"
+    quirks:
+      endpointSliceGetRBAC: false
+      endpointSliceWeightResync: false
+      recreateCNEControllerOnNull: false
+      podManagerHeal: true
+      dssmInsecureOverlay: true
+      multusTokenWatch: true
+      cpclKeySync: true
+  "2.3.1-3.2598.3-0.0.304":
+    floChartVersion: "v2.21.13-0.0.53"
+    networkModel: "legacy-spk"
+    servedGatewayAPIVersion: "gateway.k8s.f5.com/v1alpha1"
+    servedInferenceAPIVersion: "inference.networking.x-k8s.io/v1alpha2"
+    quirks:
+      endpointSliceGetRBAC: false
+      endpointSliceWeightResync: false
+      recreateCNEControllerOnNull: false
+      podManagerHeal: true
+      dssmInsecureOverlay: true
+      multusTokenWatch: true
+      cpclKeySync: true
+  "2.3.1-3.2598.3-0.0.312":
+    floChartVersion: "v2.21.13-0.0.53"
+    networkModel: "legacy-spk"
+    servedGatewayAPIVersion: "gateway.k8s.f5.com/v1alpha1"
+    servedInferenceAPIVersion: "inference.networking.x-k8s.io/v1alpha2"
+    quirks:
+      endpointSliceGetRBAC: false
+      endpointSliceWeightResync: false
+      recreateCNEControllerOnNull: false
+      podManagerHeal: true
+      dssmInsecureOverlay: true
+      multusTokenWatch: true
+      cpclKeySync: true
+  "2.3.2-3.2598.3-0.0.392":
+    floChartVersion: "v2.21.13-0.0.58"
+    networkModel: "legacy-spk"
+    servedGatewayAPIVersion: "gateway.k8s.f5.com/v1alpha1"
+    servedInferenceAPIVersion: "inference.networking.x-k8s.io/v1alpha2"
+    quirks:
+      endpointSliceGetRBAC: false
+      endpointSliceWeightResync: false
+      recreateCNEControllerOnNull: false
+      podManagerHeal: true
+      dssmInsecureOverlay: true
+      multusTokenWatch: true
+      cpclKeySync: true
+  "2.3.2-3.2598.3-0.0.464":
+    floChartVersion: "v2.21.13-0.0.58"
+    networkModel: "legacy-spk"
+    servedGatewayAPIVersion: "gateway.k8s.f5.com/v1alpha1"
+    servedInferenceAPIVersion: "inference.networking.x-k8s.io/v1alpha2"
+    quirks:
+      endpointSliceGetRBAC: false
+      endpointSliceWeightResync: false
+      recreateCNEControllerOnNull: false
+      podManagerHeal: true
+      dssmInsecureOverlay: true
+      multusTokenWatch: true
+      cpclKeySync: true
+  "2.3.3-3.2598.3-0.0.509":
+    floChartVersion: "v2.21.13-0.0.64"
+    networkModel: "legacy-spk"
+    servedGatewayAPIVersion: "gateway.k8s.f5.com/v1alpha1"
+    servedInferenceAPIVersion: "inference.networking.x-k8s.io/v1alpha2"
+    quirks:
+      endpointSliceGetRBAC: false
+      endpointSliceWeightResync: false
+      recreateCNEControllerOnNull: false
+      podManagerHeal: true
+      dssmInsecureOverlay: true
+      multusTokenWatch: true
+      cpclKeySync: true
+  "2.4.0":
+    floChartVersion: "v2.30.0-0.5.2"
+    networkModel: "gateway-infra"
+    servedGatewayAPIVersion: "gateway.k8s.f5.com/v1alpha1"
+    servedInferenceAPIVersion: "inference.networking.k8s.io/v1"
+    quirks:
+      endpointSliceGetRBAC: true
+      endpointSliceWeightResync: true
+      recreateCNEControllerOnNull: true
+      podManagerHeal: true
+      dssmInsecureOverlay: true
+      multusTokenWatch: true
+      cpclKeySync: true
+  "2.4.1":
+    floChartVersion: "v2.30.1-0.0.8"
+    networkModel: "gateway-infra"
+    servedGatewayAPIVersion: "gateway.k8s.f5.com/v1alpha1"
+    servedInferenceAPIVersion: "inference.networking.k8s.io/v1"
+    servedF5InferenceAPIVersion: "inference.k8s.f5.com/v1alpha1"
+    quirks:
+      endpointSliceGetRBAC: true
+      endpointSliceWeightResync: true
+      recreateCNEControllerOnNull: true
+      podManagerHeal: false
+      dssmInsecureOverlay: true
+      multusTokenWatch: true
+      cpclKeySync: true
+  "2.4.1-3.2850.1-0.0.9":
+    floChartVersion: "v2.30.1-0.0.8"
+    networkModel: "gateway-infra"
+    servedGatewayAPIVersion: "gateway.k8s.f5.com/v1alpha1"
+    servedInferenceAPIVersion: "inference.networking.k8s.io/v1"
+    servedF5InferenceAPIVersion: "inference.k8s.f5.com/v1alpha1"
+    quirks:
+      endpointSliceGetRBAC: true
+      endpointSliceWeightResync: true
+      recreateCNEControllerOnNull: true
+      podManagerHeal: false
+      dssmInsecureOverlay: true
+      multusTokenWatch: true
+      cpclKeySync: true
+  "2.5.0":
+    floChartVersion: "v2.40.0-0.1.0"
+    networkModel: "gateway-infra"
+    servedGatewayAPIVersion: "gateway.k8s.f5.com/v1"
+    servedInferenceAPIVersion: "inference.networking.k8s.io/v1"
+    servedF5InferenceAPIVersion: "inference.k8s.f5.com/v1alpha1"
+    quirks:
+      endpointSliceGetRBAC: false
+      endpointSliceWeightResync: false
+      recreateCNEControllerOnNull: false
+      podManagerHeal: false
+      dssmInsecureOverlay: false
+      multusTokenWatch: true
+      cpclKeySync: true

@@ -1,0 +1,55 @@
+# The MCP finance tool, assembled with Kustomize.
+#
+# `mcp-server.py` is a real Python file — editable, lintable, diffable — and the
+# ConfigMap that carries it into the cluster is GENERATED from it at apply time.
+# It used to be pasted into the manifest as an embedded YAML block string
+# alongside a standalone copy of the same file; the two were byte-identical but
+# nothing enforced that, so they would have drifted on the first edit.
+#
+# The generator also appends a content hash to the ConfigMap name and rewrites
+# the Deployment's reference to match, so editing mcp-server.py changes the pod
+# spec and Kubernetes rolls the Deployment automatically. That replaces the
+# hand-maintained `checksum/config` annotation the old manifest carried, which
+# was a stale literal and never actually triggered a restart.
+#
+# Apply with either:
+#   ./awsbnkctl k apply -f examples/agentcore-demo/mcp-tool/ --config .../cluster.yaml
+#   kubectl apply -k examples/agentcore-demo/mcp-tool/
+#
+# `awsbnkctl k apply -f <dir>` detects kustomization.yaml and builds it via
+# krusty, so no separate kustomize binary is needed.
+#
+# Note: each edit generates a new hashed ConfigMap and leaves the previous one
+# behind. Clean up stale ones with:
+#   kubectl delete cm -n default -l app.kubernetes.io/part-of=bnk-agentcore-demo \
+#     --field-selector metadata.name!=<current>
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: default
+
+resources:
+- deployment.yaml
+
+configMapGenerator:
+- name: mcp-server-code
+  files:
+  - mcp-server.py
+
+# DEMO CREDENTIALS. These are shared secrets baked into the repo on purpose so
+# the sample runs out of the box — they are not credentials in any real sense.
+# For anything beyond a demo, replace with a real Secret (External Secrets,
+# Secrets Manager CSI driver, sealed-secrets) and rotate.
+#
+# Two tokens so authorization has something to decide:
+#   agent    — the AgentCore runtime; may call every tool
+#   external — the unmanaged caller; forecast only, enforced at BNK
+secretGenerator:
+- name: mcp-server-tokens
+  literals:
+  - MCP_AGENT_TOKEN=demo-agent-token-a7f3c1
+  - MCP_EXTERNAL_TOKEN=demo-external-token-4b9e2d
+
+generatorOptions:
+  labels:
+    app.kubernetes.io/part-of: bnk-agentcore-demo

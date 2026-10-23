@@ -1,0 +1,34 @@
+# MCP session persistence for the Azure AgentFoundry demo Gateway.
+#
+# An MCP session over Streamable HTTP, SSE or WebSocket carries its state in
+# the Mcp-Session-Id header. With more than one tool-server pod behind the
+# Gateway, every message of a session must reach the pod that opened it. BNK
+# 2.4 does that with an F5BigPersistenceProfile of type MODEL_CONTEXT_PROTOCOL,
+# attached to the Gateway listener through the same NetPolicy that carries the
+# governance iRule (mcp-security-policy.yaml).
+#
+# Apply before mcp-security-policy.yaml:
+#   KUBECONFIG=.azrbnkctl/bnk-agentfoundry-demo/kubeconfig \
+#     kubectl apply -f mcp-persistence.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mcp-session-passphrase
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: bnk-agentfoundry-demo
+type: Opaque
+stringData:
+  passphrase: demo-mcp-session-passphrase-c4e1
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5BigPersistenceProfile
+metadata:
+  name: mcp-session
+  namespace: default
+spec:
+  persistenceType: MODEL_CONTEXT_PROTOCOL
+  timeout: 600
+  mcpEncryptionPassphrase:
+    secretRef:
+      name: mcp-session-passphrase

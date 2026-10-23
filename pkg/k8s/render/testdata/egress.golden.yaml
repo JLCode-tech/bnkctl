@@ -1,0 +1,54 @@
+# Rendered by internal/k8s/render.RenderEgress from cluster.yaml
+# (egress.testNamespace/vxlanKey/vxlanMtu/vxlanPort, cluster.agentPool.name)
+# + Phase25-discovered state (AGENT_EXT_IFACE) — docs/SPEC-go-tracer.md §5
+# per-file mapping. Converted from the bash seed's
+# reference/bash-seed/manifests/08-egress.yaml.tmpl (${VAR} envsubst) to Go
+# text/template placeholders.
+apiVersion: k8s.f5net.com/v3
+kind: F5SPKEgress
+metadata:
+  name: egress-agents
+  namespace: f5-cne-system
+spec:
+  egressSnatpoolMode: UNIQUE_SNAT_ADDRESS
+  maxTmmReplicas: 1
+  snatType: SRC_TRANS_AUTOMAP
+  pseudoCNIConfig:
+    appPodInterface: eth0
+    namespaces:
+    - egress-test
+    - default
+    - gkebnkctl-scn-httproute-e2e
+    - gkebnkctl-scn-traffic-split
+    - gkebnkctl-scn-egress
+    - gkebnkctl-scn-multivip
+    - gkebnkctl-scn-extpool
+    - gkebnkctl-scn-proxyl4
+    - gkebnkctl-scn-cwatch
+    - gkebnkctl-scn-tcpl4
+    - gkebnkctl-scn-udpl4
+    - gkebnkctl-scn-grpc
+    - gkebnkctl-scn-aiinference
+    - gkebnkctl-scn-aisemcache
+    - gkebnkctl-scn-aitokens
+    vxlan:
+      create: true
+      key: 100
+      mtu: 1410
+      nodeInterfaceName: ens5
+      port: 5789
+      tmmInterfaceName: external
+      vrf: ""
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: egress-client
+  namespace: egress-test
+spec:
+  nodeSelector:
+    cloud.google.com/gke-nodepool: agent-pool
+  containers:
+  - name: netshoot
+    image: nicolaka/netshoot
+    command: ["sleep", "infinity"]

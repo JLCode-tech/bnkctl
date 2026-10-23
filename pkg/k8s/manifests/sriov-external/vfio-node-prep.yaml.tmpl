@@ -1,0 +1,72 @@
+# vfio node-prep DaemonSet (sriov-external pattern).
+#
+# Binds the external data-plane ENA (PCI {{ .ExternalPCI }}) to vfio-pci in
+# No-IOMMU mode on the BNK node, so the sriov-network-device-plugin can expose it
+# as a k8s resource and TMM can attach it via DPDK. This is the awsbnkctl-encoded
+# version of the recipe proven live in an earlier feasibility spike
+# (stock AL2023 vfio supports No-IOMMU — CONFIG_VFIO_NOIOMMU=y — so no custom AMI).
+#
+# Runs on the TMM-target node (app=f5-tmm). Privileged + host /sys + /lib/modules
+# so it can modprobe and rebind PCI drivers. Idempotent: re-checks the binding on
+# a loop so a node reboot or accidental rebind self-heals.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vfio-node-prep
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/managed-by: awsbnkctl
+    app: vfio-node-prep
+spec:
+  selector:
+    matchLabels:
+      app: vfio-node-prep
+  template:
+    metadata:
+      labels:
+        app: vfio-node-prep
+    spec:
+      hostPID: true
+      hostNetwork: true
+      nodeSelector:
+        app: f5-tmm
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: bind
+          image: public.ecr.aws/amazonlinux/amazonlinux:2023
+          securityContext:
+            privileged: true
+          env:
+            - name: PCI
+              value: "{{ .ExternalPCI }}"
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              command -v modprobe >/dev/null 2>&1 || dnf install -y -q kmod pciutils >/dev/null 2>&1
+              ensure() {
+                modprobe vfio-pci 2>/dev/null || true
+                echo 1 > /sys/module/vfio/parameters/enable_unsafe_noiommu_mode 2>/dev/null || true
+                cur=$(basename "$(readlink -f /sys/bus/pci/devices/$PCI/driver 2>/dev/null)" 2>/dev/null || echo none)
+                if [ "$cur" != "vfio-pci" ]; then
+                  echo "[vfio-node-prep] binding $PCI (cur=$cur) -> vfio-pci"
+                  echo "$PCI" > /sys/bus/pci/devices/$PCI/driver/unbind 2>/dev/null || true
+                  echo vfio-pci > /sys/bus/pci/devices/$PCI/driver_override 2>/dev/null || true
+                  echo "$PCI" > /sys/bus/pci/drivers/vfio-pci/bind 2>/dev/null || \
+                    echo "$PCI" > /sys/bus/pci/drivers_probe 2>/dev/null || true
+                fi
+              }
+              ensure
+              now=$(basename "$(readlink -f /sys/bus/pci/devices/$PCI/driver 2>/dev/null)" 2>/dev/null || echo none)
+              echo "[vfio-node-prep] $PCI driver=$now noiommu=$(cat /sys/module/vfio/parameters/enable_unsafe_noiommu_mode 2>/dev/null)"
+              while true; do sleep 30; ensure; done
+          volumeMounts:
+            - { name: sys, mountPath: /sys }
+            - { name: modules, mountPath: /lib/modules, readOnly: true }
+            - { name: dev, mountPath: /dev }
+      volumes:
+        - { name: sys, hostPath: { path: /sys } }
+        - { name: modules, hostPath: { path: /lib/modules } }
+        - { name: dev, hostPath: { path: /dev } }

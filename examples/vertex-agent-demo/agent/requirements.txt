@@ -1,0 +1,5 @@
+google-cloud-aiplatform>=1.40.0
+fastmcp>=0.1.0
+requests>=2.31.0
+starlette>=0.37.0
+uvicorn>=0.30.0

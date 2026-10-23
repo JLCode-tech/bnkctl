@@ -1,0 +1,95 @@
+apiVersion: gkebnkctl/v1
+kind: Cluster
+
+metadata:
+  name: bnk-vertex-demo
+  project: YOUR_GCP_PROJECT_ID
+  zone: australia-southeast1-a
+  labels:
+    purpose: bnk-vertex-agent-demo
+
+pattern: host-device
+
+network:
+  main:
+    vpc: bnk-vertex-vpc
+    subnet: bnk-vertex-subnet
+    cidr: 10.60.0.0/24
+    podsRangeName: bnk-vertex-pods
+    podsCidr: 10.66.0.0/16
+    svcsRangeName: bnk-vertex-svcs
+    svcsCidr: 10.67.0.0/20
+
+  external:
+    vpc: bnk-vertex-ext
+    subnet: bnk-vertex-ext
+    cidr: 10.10.0.0/24
+    mtu: 8896
+    podsRangeName: tmm-ext-pods
+    podsCidr: 10.10.1.0/24
+    underlayCidr: 10.10.0.0/16
+
+  internal:
+    vpc: bnk-vertex-int
+    subnet: bnk-vertex-int
+    cidr: 10.20.0.0/24
+    mtu: 8896
+    podsRangeName: tmm-int-pods
+    podsCidr: 10.20.1.0/24
+
+  allowInternalCidr: 10.0.0.0/8
+  natGateways: true
+
+cluster:
+  kubernetesVersion: "1.35"
+  defaultPool:
+    machineType: e2-standard-4
+    nodeCount: 3
+  tmmPool:
+    name: tmm-pool
+    machineType: e2-standard-8
+    nodeCount: 1
+    maxPodsPerNode: 8
+  agentPool:
+    name: agent-pool
+    machineType: e2-standard-4
+    nodeCount: 1
+    maxPodsPerNode: 8
+
+bnk:
+  version: "2.4.1"
+  manifestVersion: "2.4.1"
+  floVersion: "v2.30.0-0.11.4"
+  imageRegistry: repo.f5.com
+  tmmMtu: "1460"
+  jwtPath: ./license.jwt
+  farSecret:
+    source: dockerconfig
+    dockerConfigFile: ./dockerconfig.json
+    namespaces: [f5-cne-core, f5-cne-system, f5-bnk-instance, f5-utils, default]
+  aiGateway:
+    enabled: true
+    aiMetrics: true
+    defaultEgressRoute: true
+    dnsResolver: true
+    dssmSentinel: true
+    multiNumaSpanning: true
+
+egress:
+  testNamespace: bnk-demo
+  vxlanPort: 5789
+  vxlanKey: 100
+  vxlanMtu: 1410
+
+forge:
+  enabled: true
+  url: http://localhost:8000
+  mcpUrl: http://localhost:8081/mcp/
+  credentialTemplateId: 4
+  username: admin
+  password: admin123
+
+tags:
+  cost-center: RnD-AI
+  env: demo
+  purpose: bnk-vertex-agent-demo

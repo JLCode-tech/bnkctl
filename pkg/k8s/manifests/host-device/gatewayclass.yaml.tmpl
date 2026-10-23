@@ -1,0 +1,20 @@
+# GatewayClass — Gateway API entry point for the BNK CNE controller.
+#
+# Operator-facing Gateway CRs reference this class via .spec.gatewayClassName.
+# The cne-controller watches Gateways pointing at this controllerName and
+# programs TMM listeners / pools accordingly.
+#
+# controllerName is namespace-scoped: f5.com/<InstanceNS>-f5-cne-controller.
+# Our split-namespace model uses InstanceNS for both operator + instance, so
+# the controller name is f5.com/f5-cne-system-f5-cne-controller for the
+# default install.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: {{ .GwcName }}
+  labels:
+    app.kubernetes.io/managed-by: awsbnkctl
+    app.kubernetes.io/instance: {{ .LabName }}
+spec:
+  controllerName: f5.com/{{ .InstanceNS }}-f5-cne-controller
+  description: F5 BIG-IP Kubernetes Gateway

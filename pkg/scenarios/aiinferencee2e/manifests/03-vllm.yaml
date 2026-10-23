@@ -1,0 +1,265 @@
+{{- if .Synthetic}}
+---
+# KV-event relay for the simulator (see the kv-relay container below).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vllm-kv-relay
+  namespace: {{.Namespace}}
+data:
+  relay.py: |
+{{.KVRelayScript}}
+{{- end}}
+---
+# HuggingFace token: mount the hf-token Secret if the model is gated.
+# In synthetic mode (llm-d-inference-sim), no GPU or HF token is required.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  namespace: {{.Namespace}}
+  labels:
+    app: vllm
+spec:
+  replicas: {{if .Synthetic}}{{.Sim.Replicas}}{{else}}1{{end}}
+  # Recreate strategy: prevents RollingUpdate deadlock on single-GPU nodes.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: vllm
+  template:
+    metadata:
+      labels:
+        app: vllm
+{{- if .Synthetic}}
+      # What the simulator stands in for; Forge records it on every benchmark run.
+      annotations:
+        awsbnkctl.io/sim-profile: "{{.Sim.Profile}}"
+        awsbnkctl.io/sim-model: "{{.Sim.Model}}"
+        awsbnkctl.io/kv-relay-sha: "{{.KVRelaySHA}}"
+{{- end}}
+    spec:
+      enableServiceLinks: false
+{{if not .Synthetic}}
+      # Target GPU nodes: the GPU nodegroup is tainted nvidia.com/gpu=present:NoSchedule
+      # and labelled awsbnkctl.io/gpu=true. Both nodeSelector and toleration are required.
+      nodeSelector:
+        awsbnkctl.io/gpu: "true"
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+{{end}}
+{{- if .Synthetic}}
+      # Real tokenizer for the simulator: vLLM's render server (tokenizer and chat template
+      # only, no GPU, no weights). Without it the simulator hashes pseudo-tokens, so its KV
+      # events never match the block hashes an endpoint picker computes. A native sidecar,
+      # ready before the simulator starts.
+      initContainers:
+      - name: vllm-render
+        image: {{.RenderImage}}
+        restartPolicy: Always
+        command: ["vllm"]
+        args:
+        - launch
+        - render
+        - "{{.Sim.Model}}"
+        - --port=8082
+        - --served-model-name
+        - "{{.Sim.Model}}"
+        - "{{.Sim.ServedModelName}}"
+        env:
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: token
+              optional: true
+        ports:
+        - name: render
+          containerPort: 8082
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8082
+          periodSeconds: 5
+          failureThreshold: 60
+        resources:
+          requests:
+            cpu: 250m
+            memory: 1Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi
+        volumeMounts:
+        - name: hf-cache
+          mountPath: /root/.cache/huggingface
+{{- end}}
+      containers:
+      - name: vllm
+{{if .Synthetic}}
+        # llm-d-inference-sim: an OpenAI-compatible vLLM stand-in with vLLM's /metrics
+        # and render endpoints, prefix-cache-aware prefill timing and KV-cache events.
+        # --model is the HF id, as vLLM serves it by default: the simulator labels KV events
+        # and metrics with it, and endpoint pickers match them against the model they route
+        # (the F5 EPP its tokenizer model, llm-d the request model).
+        image: {{.Sim.Image}}
+        args:
+        - --model={{.Sim.Model}}
+        - --port=8000
+        - --mode=random
+        - --latency-calculator=per-token
+        - --prefill-overhead={{.Sim.TTFTBaseMs}}ms
+        - --prefill-time-per-token={{.Sim.PrefillUsPerToken}}us
+        - --inter-token-latency={{.Sim.ITLMs}}ms
+        - --time-factor-under-load={{.Sim.TimeFactorUnderLoad}}
+        - --max-num-seqs={{.Sim.MaxNumSeqs}}
+        - --max-model-len={{.Sim.MaxModelLen}}
+        - --enable-kvcache
+        - --kv-cache-size={{.Sim.KVCacheBlocks}}
+        - --block-size=64
+        # Tokenize with the real tokenizer (vllm-render), as vLLM does.
+        - --render-url=http://localhost:8082
+        # KV events go to the kv-relay sidecar; replay is served here on 20081 (as vLLM).
+        - --zmq-endpoint={{.KVEventsEndpoint}}
+        - --kv-events-replay-endpoint=tcp://*:20081
+        # vLLM's event encoding: a root block's parent hash is nil, not 0.
+        - --use-vllm-map-event-format
+        # Also answer to the short alias.
+        - --served-model-name
+        - "{{.Sim.Model}}"
+        - "{{.Sim.ServedModelName}}"
+        env:
+        # KV-event topic is kv@<POD_IP>:<port>@<model>.
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        ports:
+        - containerPort: 8000
+        - name: kv-replay
+          containerPort: 20081
+        resources:
+          requests:
+            cpu: 250m
+            memory: 128Mi
+          limits:
+            cpu: "2"
+            memory: 1Gi
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8000
+          initialDelaySeconds: 2
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      # The simulator only connects out with KV events; vLLM listens and endpoint pickers
+      # (F5 EPP, llm-d) connect to each pod on 20080. This relay listens there for it.
+      - name: kv-relay
+        image: {{.KVRelayImage}}
+        command: ["python", "-u", "/relay/relay.py"]
+        ports:
+        - name: kv-events
+          containerPort: 20080
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 500m
+            memory: 128Mi
+        volumeMounts:
+        - name: kv-relay
+          mountPath: /relay
+      volumes:
+      - name: kv-relay
+        configMap:
+          name: vllm-kv-relay
+      - name: hf-cache
+        emptyDir: {}
+{{else}}
+        image: vllm/vllm-openai:latest
+        args:
+        - --model
+        - meta-llama/Meta-Llama-3-8B-Instruct
+        # llama3 for clients; the tokenizer's HF id for the F5 EPP route, which rewrites to it (05).
+        - --served-model-name
+        - llama3
+        - "{{.TokenizerModel}}"
+        - --port
+        - "8000"
+        # KV-cache events for KV-aware endpoint pickers: each pod listens where the F5 EPP
+        # connects (20080, replay 20081); the llm-d router reads the port from this flag.
+        # 64-token blocks match theirs.
+        - --block-size
+        - "64"
+        - --kv-events-config
+        - '{"enable_kv_cache_events":true,"publisher":"zmq","endpoint":"tcp://*:20080","replay_endpoint":"tcp://*:20081","topic":"kv@$(POD_IP):8000@llama3"}'
+        ports:
+        - containerPort: 8000
+        - name: kv-events
+          containerPort: 20080
+        env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: token
+              # optional: true so the pod starts even without the Secret;
+              # the model pull will fail at runtime if the model requires auth.
+              optional: true
+        - name: HUGGING_FACE_HUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: token
+              optional: true
+        resources:
+          requests:
+            nvidia.com/gpu: "1"
+            # Sized to fit g5.xlarge allocatable (~3.92 CPU / ~14.4 GiB after
+            # kubelet/system/DaemonSet reservations). Verified live 2026-06-13.
+            memory: 8Gi
+            cpu: "2"
+          limits:
+            nvidia.com/gpu: "1"
+            memory: 14Gi
+            cpu: 3500m
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 120
+          periodSeconds: 15
+          failureThreshold: 20
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 180
+          periodSeconds: 30
+          failureThreshold: 5
+{{end}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm
+  namespace: {{.Namespace}}
+spec:
+  selector:
+    app: vllm
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8000

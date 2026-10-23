@@ -1,0 +1,92 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: http2-scenario
+---
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: GatewaySettings
+metadata:
+  name: http2-scenario
+  namespace: http2-scenario
+spec:
+  ingressConfig:
+    defaultListenerNetwork:
+      ipamRefs:
+      - name: listener-pool
+      networkRefs:
+      - name: ext-vlan-infra
+      sourceNATConfig:
+        type: Automap
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: http2-backend
+  namespace: http2-scenario
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: http2
+  template:
+    metadata:
+      labels:
+        app: http2
+    spec:
+      containers:
+      - name: http2
+        image: kennethreitz/httpbin
+        command: ["gunicorn", "-b", "0.0.0.0:8000", "httpbin:app", "-k", "gevent"]
+        ports:
+        - containerPort: 8000
+          protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: http2-backend
+  namespace: http2-scenario
+spec:
+  selector:
+    app: http2
+  ports:
+  - port: 8000
+    targetPort: 8000
+    protocol: TCP
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: http2-gateway
+  namespace: http2-scenario
+spec:
+  gatewayClassName: lz-warsaw-gatewayclass
+  infrastructure:
+    parametersRef:
+      group: gateway.k8s.f5.com
+      kind: GatewaySettings
+      name: http2-scenario
+  addresses:
+  - type: IPAddress
+    value: 10.106.10.123
+  listeners:
+  - name: http2-listen
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: http2-route
+  namespace: http2-scenario
+spec:
+  parentRefs:
+  - name: http2-gateway
+    sectionName: http2-listen
+  rules:
+  - backendRefs:
+    - name: http2-backend
+      port: 8000

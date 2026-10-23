@@ -1,0 +1,82 @@
+apiVersion: awsbnkctl/v1
+kind: Cluster
+
+metadata:
+  name: bnk-syd-agentcore-v2
+  region: ap-southeast-2
+  labels:
+    purpose: bnk-syd-agentcore-v2
+
+pattern: host-device
+
+network:
+  vpcCidr: 10.50.0.0/16
+  azs:
+    - ap-southeast-2a
+    - ap-southeast-2b
+  subnets:
+    public:
+      - cidr: 10.50.1.0/24
+        az: ap-southeast-2a
+      - cidr: 10.50.2.0/24
+        az: ap-southeast-2b
+    private:
+      - cidr: 10.50.11.0/24
+        az: ap-southeast-2a
+      - cidr: 10.50.12.0/24
+        az: ap-southeast-2b
+  dataPath:
+    external:
+      cidr: 10.50.10.0/24
+      az: ap-southeast-2a
+    internal:
+      cidr: 10.50.20.0/24
+      az: ap-southeast-2a
+  natGateways: 1
+
+cluster:
+  kubernetesVersion: "1.35"
+  nodeGroups:
+    - name: default
+      instanceType: m6i.4xlarge
+      desiredSize: 3
+      minSize: 3
+      maxSize: 4
+      diskSize: 50
+
+addons:
+  lbController:
+    enabled: true
+
+bnk:
+  farArchive: ./cne_pull_64.json
+  jwt: ./license.jwt
+  version: "2.4.1"
+  manifestVersion: "2.4.1"
+  floVersion: "v2.30.1-0.0.8"
+  bgp: true
+  aiGateway:
+    enabled: true
+    aiMetrics: true
+    defaultEgressRoute: true
+    dnsResolver: true
+    dssmSentinel: true
+    multiNumaSpanning: true
+
+testing:
+  jumphost:
+    enabled: true
+    instanceType: c6i.4xlarge
+    mgmtSubnetIndex: 0
+
+forge:
+  enabled: true
+  url: http://localhost:8000
+  mcpUrl: http://localhost:8081/mcp/
+  credentialTemplateId: 1
+  username: admin
+
+tags:
+  cost-center: RnD-AI
+  env: demo-v2
+  purpose: bnk-syd-agentcore-v2

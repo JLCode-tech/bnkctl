@@ -1,0 +1,50 @@
+# flo-values.yaml — Go text/template (ported from aws-gpu-setup/manifests/flo-values.yaml).
+# Variables are substituted at Phase 14 render time via render.FLOValuesVars.
+#
+# Substitutions:
+#   {{ .CAIssuer }}      — <cluster>-ca-cluster-issuer (from slice-5 cert chain)
+#   {{ .FARSecretName }} — far-secret (slice-5 pull secret name)
+#   {{ .JWT }}           — raw JWT token contents from cl.Bnk.JWT
+#   {{ .ClusterName }}   — cl.Metadata.Name (used in friendlyName)
+---
+global:
+  certmgr:
+    clusterIssuer: {{ .CAIssuer }}
+  imagePullSecrets:
+    - name: {{ .FARSecretName }}
+containerPlatform: AWS
+image:
+  repository: repo.f5.com/images
+  pullPolicy: Always
+fluentbit_sidecar:
+  enabled: false
+f5-spk-crds-common:
+  versionValidator:
+    image:
+      repository: repo.f5.com/images
+f5-spk-crds-service-proxy:
+  versionValidator:
+    image:
+      repository: repo.f5.com/images
+f5-ipam-operator:
+  image:
+    repository: repo.f5.com/images
+    pullPolicy: Always
+  namespace: "default"
+  nameOverride: "f5-ipam-operator"
+  fullnameOverride: "f5-ipam-operator"
+f5-spk-cnf-flo:
+  certman:
+    issuer: {{ .CAIssuer }}
+license:
+  operationMode: connected
+  jwt: "{{ .JWT }}"
+  friendlyName: "BNK {{ .ClusterName }}"
+  teemCertUrl: "https://product.apis.f5.com/ee/v1"
+  teemEntitlementUrl: "https://product-s.apis.f5.com/ee/v1"
+  teemInitialConfigUrl: "https://product-s.apis.f5.com/ee/v1"
+  logLevel: "info"
+  kid: "v1"
+  alg: "RS512"
+  kty: "RSA"
+  use: "sig"

@@ -1,0 +1,18 @@
+# PROVEN LIVE 2026-07-20 on bnk-hostdev — this exact shape reached License
+# status Active/eval in ~60s. Without it: "Configs are not allowed since
+# license is not activated" and no VLAN programming (contract item 6 in
+# reference/TRIAL-NOTES.md).
+#
+# Rendered by internal/k8s/render.RenderLicenseCR from the JWT file at
+# cluster.yaml's bnk.jwtPath — .JWT is the RAW token string
+# (whitespace-trimmed file contents, NOT base64). The JWT content is read at
+# apply time and is NEVER written to disk (docs/SPEC-go-tracer.md §2
+# "Secrets constraint").
+apiVersion: k8s.f5net.com/v1
+kind: License
+metadata:
+  name: bnk-license
+  namespace: f5-cne-core
+spec:
+  operationMode: connected
+  jwt: "{{ .JWT }}"

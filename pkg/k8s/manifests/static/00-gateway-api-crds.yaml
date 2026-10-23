@@ -1,0 +1,342 @@
+# Gateway API CRDs (v1 / v1beta1 / v1alpha2) for BNK 2.4 CNE controller and scenario suites.
+# Installed idempotently via server-side apply during Phase36FLO.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: gatewayclasses.gateway.networking.k8s.io
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes-sigs/gateway-api/pull/3175
+    gateway.networking.k8s.io/bundle-version: v1.2.0
+    gateway.networking.k8s.io/channel: experimental
+spec:
+  group: gateway.networking.k8s.io
+  names:
+    categories:
+      - gateway-api
+    kind: GatewayClass
+    listKind: GatewayClassList
+    plural: gatewayclasses
+    shortNames:
+      - gc
+    singular: gatewayclass
+  scope: Cluster
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+    - name: v1beta1
+      served: true
+      storage: false
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: gateways.gateway.networking.k8s.io
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes-sigs/gateway-api/pull/3175
+    gateway.networking.k8s.io/bundle-version: v1.2.0
+    gateway.networking.k8s.io/channel: experimental
+spec:
+  group: gateway.networking.k8s.io
+  names:
+    categories:
+      - gateway-api
+    kind: Gateway
+    listKind: GatewayList
+    plural: gateways
+    shortNames:
+      - gtw
+    singular: gateway
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+    - name: v1beta1
+      served: true
+      storage: false
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: httproutes.gateway.networking.k8s.io
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes-sigs/gateway-api/pull/3175
+    gateway.networking.k8s.io/bundle-version: v1.2.0
+    gateway.networking.k8s.io/channel: experimental
+spec:
+  group: gateway.networking.k8s.io
+  names:
+    categories:
+      - gateway-api
+    kind: HTTPRoute
+    listKind: HTTPRouteList
+    plural: httproutes
+    singular: httproute
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+    - name: v1beta1
+      served: true
+      storage: false
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: grpcroutes.gateway.networking.k8s.io
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes-sigs/gateway-api/pull/3175
+    gateway.networking.k8s.io/bundle-version: v1.2.0
+    gateway.networking.k8s.io/channel: experimental
+spec:
+  group: gateway.networking.k8s.io
+  names:
+    categories:
+      - gateway-api
+    kind: GRPCRoute
+    listKind: GRPCRouteList
+    plural: grpcroutes
+    singular: grpcroute
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+    - name: v1alpha2
+      served: true
+      storage: false
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: referencegrants.gateway.networking.k8s.io
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes-sigs/gateway-api/pull/3175
+    gateway.networking.k8s.io/bundle-version: v1.2.0
+    gateway.networking.k8s.io/channel: experimental
+spec:
+  group: gateway.networking.k8s.io
+  names:
+    categories:
+      - gateway-api
+    kind: ReferenceGrant
+    listKind: ReferenceGrantList
+    plural: referencegrants
+    shortNames:
+      - refgrant
+    singular: referencegrant
+  scope: Namespaced
+  versions:
+    - name: v1beta1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+    - name: v1alpha2
+      served: true
+      storage: false
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: tcproutes.gateway.networking.k8s.io
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes-sigs/gateway-api/pull/3175
+    gateway.networking.k8s.io/bundle-version: v1.2.0
+    gateway.networking.k8s.io/channel: experimental
+spec:
+  group: gateway.networking.k8s.io
+  names:
+    categories:
+      - gateway-api
+    kind: TCPRoute
+    listKind: TCPRouteList
+    plural: tcproutes
+    singular: tcproute
+  scope: Namespaced
+  versions:
+    - name: v1alpha2
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: udproutes.gateway.networking.k8s.io
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes-sigs/gateway-api/pull/3175
+    gateway.networking.k8s.io/bundle-version: v1.2.0
+    gateway.networking.k8s.io/channel: experimental
+spec:
+  group: gateway.networking.k8s.io
+  names:
+    categories:
+      - gateway-api
+    kind: UDPRoute
+    listKind: UDPRouteList
+    plural: udproutes
+    singular: udproute
+  scope: Namespaced
+  versions:
+    - name: v1alpha2
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: tlsroutes.gateway.networking.k8s.io
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes-sigs/gateway-api/pull/3175
+    gateway.networking.k8s.io/bundle-version: v1.2.0
+    gateway.networking.k8s.io/channel: experimental
+spec:
+  group: gateway.networking.k8s.io
+  names:
+    categories:
+      - gateway-api
+    kind: TLSRoute
+    listKind: TLSRouteList
+    plural: tlsroutes
+    singular: tlsroute
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+    - name: v1alpha2
+      served: true
+      storage: false
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: backendtlspolicies.gateway.networking.k8s.io
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes-sigs/gateway-api/pull/3175
+    gateway.networking.k8s.io/bundle-version: v1.2.0
+    gateway.networking.k8s.io/channel: experimental
+spec:
+  group: gateway.networking.k8s.io
+  names:
+    categories:
+      - gateway-api
+    kind: BackendTLSPolicy
+    listKind: BackendTLSPolicyList
+    plural: backendtlspolicies
+    shortNames:
+      - btlspolicy
+    singular: backendtlspolicy
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+    - name: v1alpha3
+      served: true
+      storage: false
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+    - name: v1alpha2
+      served: true
+      storage: false
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true

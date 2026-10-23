@@ -1,0 +1,24 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: scn-tcp-lb-gateway
+  namespace: {{.Namespace}}
+spec:
+  gatewayClassName: {{.GatewayClassName}}
+  infrastructure:
+    parametersRef:
+      group: gateway.k8s.f5.com
+      kind: GatewaySettings
+      name: awsbnkctl-tcplb
+  addresses:
+  - type: IPAddress
+    value: {{.VIP}}
+  listeners:
+  - name: tcp-listener
+    protocol: TCP
+    port: 8080
+    allowedRoutes:
+      namespaces: {from: Same}
+      kinds:
+      - kind: L4Route
+        group: gateway.k8s.f5.com

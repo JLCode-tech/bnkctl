@@ -1,0 +1,67 @@
+apiVersion: azrbnkctl/v1
+kind: Cluster
+
+metadata:
+  name: poc-dual-interface
+  subscriptionId: 00000000-0000-0000-0000-000000000000
+  location: eastus2
+  resourceGroup: f5-bigip-ve-demo-rg
+
+pattern: dual-interface
+
+network:
+  vnetCidr: 10.0.0.0/16
+  subnets:
+    system: 10.0.0.0/20
+    public: 10.0.16.0/28
+    external: 10.0.17.0/24
+    internal: 10.0.18.0/24
+
+cluster:
+  kubernetesVersion: "1.34.10"
+  systemNodePool:
+    name: system
+    vmSize: Standard_D4s_v3
+    count: 2
+  tmmNodePool:
+    name: tmm
+    vmSize: Standard_D8s_v3
+    count: 1
+    acceleratedNetworking: true
+
+bnk:
+  version: "2.4.1"
+  manifestVersion: "2.4.1"
+  floVersion: "v2.30.0-0.11.4"
+  deploymentSize: "Small"
+  tmmCpu: "2"
+  tmmMemory: "4Gi"
+  tmmMtu: 1500
+  farArchive: "./keys/f5-far-auth-key.tgz"
+  jwt: "./keys/license.jwt"
+  aiGateway:
+    enabled: true
+    aiMetrics: true
+    defaultEgressRoute: true
+    dnsResolver: true
+    dssmSentinel: true
+    multiNumaSpanning: true
+
+egress:
+  enabled: true
+  namespace: "bnk-demo"
+  port: 4789
+
+forge:
+  enabled: true
+  url: http://localhost:8000
+  mcpUrl: http://localhost:8081/mcp/
+  credentialTemplateId: 3
+  username: admin
+  password: admin123
+
+tags:
+  Environment: "demo"
+  Region: "australiaeast"
+  Purpose: "bnk-agentfoundry-demo"
+  ManagedBy: "azrbnkctl"

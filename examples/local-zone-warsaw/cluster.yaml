@@ -1,0 +1,67 @@
+apiVersion: awsbnkctl/v1
+kind: Cluster
+
+metadata:
+  name: lz-warsaw
+  region: eu-central-1
+  labels:
+    purpose: bnk-localzone-warsaw
+    environment: edge-lz
+
+pattern: host-device
+
+network:
+  vpcCidr: 10.106.0.0/16
+
+  azs:
+    - eu-central-1a
+    - eu-central-1b
+    - eu-central-1-waw-1a
+
+  subnets:
+    public:
+      - cidr: 10.106.1.0/24
+        az: eu-central-1a
+      - cidr: 10.106.2.0/24
+        az: eu-central-1b
+      - cidr: 10.106.3.0/24
+        az: eu-central-1-waw-1a
+
+    private:
+      - cidr: 10.106.11.0/24
+        az: eu-central-1a
+      - cidr: 10.106.12.0/24
+        az: eu-central-1b
+
+  dataPath:
+    external:
+      cidr: 10.106.10.0/24
+      az: eu-central-1-waw-1a
+    internal:
+      cidr: 10.106.20.0/24
+      az: eu-central-1-waw-1a
+
+  natGateways: 1
+
+cluster:
+  kubernetesVersion: "1.35"
+  nodeGroups:
+    - name: lz-workers
+      instanceType: m5.2xlarge
+      desiredSize: 4
+      minSize: 3
+      maxSize: 5
+      diskSize: 50
+
+bnk:
+  farArchive: ../../cne_pull_64.json
+  jwt: ../../license.jwt
+  bgp: false
+
+forge:
+  enabled: true
+  projectName: bnk-aws-localzone
+  url: http://localhost:8000
+  mcpUrl: http://localhost:8081/mcp/
+  username: mcp
+  password: mcp-svc-local-token-2026-auth

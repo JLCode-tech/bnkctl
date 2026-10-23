@@ -1,0 +1,107 @@
+# Infra CR — the BNK 2.4 network model for the host-device pattern. It replaces
+# the 2.3 F5SPKVlan and F5SPKStaticRoute CRs (the 2.4 release notes: Infra
+# "consolidates F5SPKVlan, F5SPKStaticRoute, VRF and VxLAN"); with
+# USE_GATEWAY_SETTINGS the controller ignores those CRs entirely.
+#
+# The Nth NAD listed in CNEInstance .spec.networkAttachments is TMM trunk 1.N,
+# so ext-vlan (external NAD) is 1.1 and int-vlan (internal NAD) is 1.2.
+# Each self-IP pool is the /27 that contains the configured self IP (default
+# .240 -> .224-.254): the F5 IPAM controller splits a pool into per-device
+# blocks and needs at least 3, so single addresses and /30s never allocate.
+# FIC picks the self IP; phase 23b puts it on the ENI and records it as
+# TMM_EXT_SELFIP / TMM_INT_SELFIP.
+# The listener pool is the VIP range every scenario and demo draws from (see docs/SCENARIOS.md, "VIP plan").
+#
+# Egress (EgressGateway + GatewaySettings egressConfigs, see the egress-snat
+# scenario): egressDefaults names the VLAN the VXLAN tunnel from the worker
+# nodes terminates on and the overlay subnet; the product creates the tunnel
+# itself. The two static routes are what the egress path needs on AWS, where
+# the subnet router is the first host address of every subnet:
+#   - the VPC via the tunnel VLAN's gateway: VXLAN replies to worker nodes must
+#     leave on the VLAN they arrived on, not TMM's pod interface;
+#   - default via the external VLAN's gateway: AUTOMAP SNAT picks the self IP
+#     of the egress interface, so this is what makes the source the external
+#     self IP and sends the traffic out ext-vlan -> NAT gateway.
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: Infra
+metadata:
+  name: {{ .InfraName }}
+  namespace: {{ .InstanceNS }}
+  labels:
+    app.kubernetes.io/managed-by: awsbnkctl
+    app.kubernetes.io/instance: {{ .LabName }}
+spec:
+  ipams:
+    # availabilityZone: the controller groups TMM devices per zone (its log
+    # shows group "ap-southeast-2a") and counts the self IPs a group can use when
+    # deciding how many TMMs may be active. On AWS a pool without a zone was not
+    # attributed to the group (maxActiveDevices=0, live 2026-09-11).
+    - name: ext-selfip
+      ipPools:
+        - rangeStart: "{{ .TmmExtSelfIP }}"
+          rangeEnd: "{{ .TmmExtSelfIPEnd }}"
+{{- if .ExtAZ }}
+          availabilityZone: "{{ .ExtAZ }}"
+{{- end }}
+{{- if .HasInternal }}
+    - name: int-selfip
+      ipPools:
+        - rangeStart: "{{ .TmmIntSelfIP }}"
+          rangeEnd: "{{ .TmmIntSelfIPEnd }}"
+{{- if .IntAZ }}
+          availabilityZone: "{{ .IntAZ }}"
+{{- end }}
+{{- end }}
+    - name: {{ .ListenerPool }}
+      ipPools:
+        - rangeStart: "{{ .ListenerStart }}"
+          rangeEnd: "{{ .ListenerEnd }}"
+{{- if .ExtAZ }}
+          availabilityZone: "{{ .ExtAZ }}"
+{{- end }}
+  networkAttachments:
+    - name: ext-attach
+      networkAttachmentDefinitions:
+        - name: {{ .ExternalNAD }}
+{{- if .HasInternal }}
+    - name: int-attach
+      networkAttachmentDefinitions:
+        - name: {{ .InternalNAD }}
+{{- end }}
+  networks:
+    - name: {{ .ExtNetwork }}
+      type: vlan
+      vlan:
+        tag: 0
+        mtu: {{ .Mtu }}
+        networkAttachmentRef:
+          name: ext-attach
+        ipamRefs:
+          - name: ext-selfip
+{{- if .HasInternal }}
+    - name: {{ .IntNetwork }}
+      type: vlan
+      vlan:
+        tag: 0
+        mtu: {{ .Mtu }}
+        networkAttachmentRef:
+          name: int-attach
+        ipamRefs:
+          - name: int-selfip
+{{- end }}
+  egressDefaults:
+    subnet: {{ .EgressSubnet }}
+    port: {{ .EgressPort }}
+    networkRef:
+      name: {{ .TunnelNetwork }}
+{{- if and .VpcCidr .TunnelGateway .ExtGateway }}
+  staticRoutes:
+    - name: {{ .RouteVPC }}
+      destinations:
+        - {{ .VpcCidr }}
+      nextHop: {{ .TunnelGateway }}
+    - name: {{ .RouteDefault }}
+      destinations:
+        - 0.0.0.0/0
+      nextHop: {{ .ExtGateway }}
+{{- end }}

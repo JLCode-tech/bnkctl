@@ -1,0 +1,67 @@
+apiVersion: awsbnkctl/v1
+kind: Cluster
+
+metadata:
+  name: lz-losangeles
+  region: us-west-2
+  labels:
+    purpose: bnk-localzone-losangeles
+    environment: edge-lz
+
+pattern: host-device
+
+network:
+  vpcCidr: 10.105.0.0/16
+
+  azs:
+    - us-west-2a
+    - us-west-2b
+    - us-west-2-lax-1a
+
+  subnets:
+    public:
+      - cidr: 10.105.1.0/24
+        az: us-west-2a
+      - cidr: 10.105.2.0/24
+        az: us-west-2b
+      - cidr: 10.105.3.0/24
+        az: us-west-2-lax-1a
+
+    private:
+      - cidr: 10.105.11.0/24
+        az: us-west-2a
+      - cidr: 10.105.12.0/24
+        az: us-west-2b
+
+  dataPath:
+    external:
+      cidr: 10.105.10.0/24
+      az: us-west-2-lax-1a
+    internal:
+      cidr: 10.105.20.0/24
+      az: us-west-2-lax-1a
+
+  natGateways: 1
+
+cluster:
+  kubernetesVersion: "1.35"
+  nodeGroups:
+    - name: lz-workers
+      instanceType: m5.2xlarge
+      desiredSize: 4
+      minSize: 3
+      maxSize: 5
+      diskSize: 50
+
+bnk:
+  farArchive: ../../cne_pull_64.json
+  jwt: ../../license.jwt
+  bgp: false
+
+forge:
+  enabled: true
+  projectName: bnk-aws-localzone
+  url: http://localhost:8000
+  mcpUrl: http://localhost:8081/mcp/
+  username: mcp
+  password: mcp-svc-local-token-2026-auth

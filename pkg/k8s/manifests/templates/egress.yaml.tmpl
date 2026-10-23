@@ -1,0 +1,82 @@
+# Rendered by internal/k8s/render.RenderEgress from cluster.yaml
+# (egress.testNamespace/vxlanKey/vxlanMtu/vxlanPort, cluster.agentPool.name)
+# + Phase25-discovered state (AGENT_EXT_IFACE) — docs/SPEC-go-tracer.md §5
+# per-file mapping. Converted from the bash seed's
+# reference/bash-seed/manifests/08-egress.yaml.tmpl (${VAR} envsubst) to Go
+# text/template placeholders.
+apiVersion: k8s.f5net.com/v3
+kind: F5SPKEgress
+metadata:
+  name: egress-agents
+  namespace: f5-cne-system
+spec:
+  egressSnatpoolMode: UNIQUE_SNAT_ADDRESS
+  maxTmmReplicas: 1
+  snatType: SRC_TRANS_AUTOMAP
+  pseudoCNIConfig:
+    appPodInterface: eth0
+    namespaces:
+    - {{ .TestNamespace }}
+{{- if ne .TestNamespace "default" }}
+    - default
+{{- end }}
+{{- if ne .TestNamespace "gkebnkctl-scn-httproute-e2e" }}
+    - gkebnkctl-scn-httproute-e2e
+{{- end }}
+{{- if ne .TestNamespace "gkebnkctl-scn-traffic-split" }}
+    - gkebnkctl-scn-traffic-split
+{{- end }}
+{{- if ne .TestNamespace "gkebnkctl-scn-egress" }}
+    - gkebnkctl-scn-egress
+{{- end }}
+{{- if ne .TestNamespace "gkebnkctl-scn-multivip" }}
+    - gkebnkctl-scn-multivip
+{{- end }}
+{{- if ne .TestNamespace "gkebnkctl-scn-extpool" }}
+    - gkebnkctl-scn-extpool
+{{- end }}
+{{- if ne .TestNamespace "gkebnkctl-scn-proxyl4" }}
+    - gkebnkctl-scn-proxyl4
+{{- end }}
+{{- if ne .TestNamespace "gkebnkctl-scn-cwatch" }}
+    - gkebnkctl-scn-cwatch
+{{- end }}
+{{- if ne .TestNamespace "gkebnkctl-scn-tcpl4" }}
+    - gkebnkctl-scn-tcpl4
+{{- end }}
+{{- if ne .TestNamespace "gkebnkctl-scn-udpl4" }}
+    - gkebnkctl-scn-udpl4
+{{- end }}
+{{- if ne .TestNamespace "gkebnkctl-scn-grpc" }}
+    - gkebnkctl-scn-grpc
+{{- end }}
+{{- if ne .TestNamespace "gkebnkctl-scn-aiinference" }}
+    - gkebnkctl-scn-aiinference
+{{- end }}
+{{- if ne .TestNamespace "gkebnkctl-scn-aisemcache" }}
+    - gkebnkctl-scn-aisemcache
+{{- end }}
+{{- if ne .TestNamespace "gkebnkctl-scn-aitokens" }}
+    - gkebnkctl-scn-aitokens
+{{- end }}
+    vxlan:
+      create: true
+      key: {{ .VxlanKey }}
+      mtu: {{ .VxlanMtu }}
+      nodeInterfaceName: {{ .AgentExtIface }}
+      port: {{ .VxlanPort }}
+      tmmInterfaceName: external
+      vrf: ""
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: egress-client
+  namespace: {{ .TestNamespace }}
+spec:
+  nodeSelector:
+    cloud.google.com/gke-nodepool: {{ .AgentPoolName }}
+  containers:
+  - name: netshoot
+    image: nicolaka/netshoot
+    command: ["sleep", "infinity"]

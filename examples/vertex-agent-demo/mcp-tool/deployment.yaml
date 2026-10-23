@@ -1,0 +1,76 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bnk-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vertex-finance-mcp
+  namespace: bnk-demo
+  labels:
+    app: vertex-finance-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vertex-finance-mcp
+  template:
+    metadata:
+      labels:
+        app: vertex-finance-mcp
+    spec:
+      nodeSelector:
+        cloud.google.com/gke-nodepool: agent-pool
+      containers:
+        - name: mcp-tool
+          image: python:3.11-slim
+          command:
+            - python3
+            - -u
+            - /app/mcp-server.py
+          env:
+            - name: MCP_PORT
+              value: "8080"
+            - name: MCP_AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-tokens
+                  key: agent-token
+            - name: MCP_EXTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-tokens
+                  key: external-token
+          ports:
+            - containerPort: 8080
+              name: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          volumeMounts:
+            - name: tool-script
+              mountPath: /app
+      volumes:
+        - name: tool-script
+          configMap:
+            name: vertex-finance-mcp-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vertex-finance-mcp
+  namespace: bnk-demo
+  labels:
+    app: vertex-finance-mcp
+spec:
+  selector:
+    app: vertex-finance-mcp
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+      name: http

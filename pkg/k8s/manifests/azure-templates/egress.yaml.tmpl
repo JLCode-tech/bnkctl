@@ -1,0 +1,51 @@
+{{- if .GatewayClassName }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Namespace }}
+---
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: GatewaySettings
+metadata:
+  name: default-egress
+  namespace: {{ .Namespace }}
+spec:
+  egressConfigs:
+  - name: default-egress
+    networkRef:
+      name: {{ .NetworkRef }}
+    sourceNATConfig:
+      type: Automap
+---
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: EgressGateway
+metadata:
+  name: default-egress
+  namespace: {{ .Namespace }}
+spec:
+  gatewayClassName: {{ .GatewayClassName }}
+  infrastructure:
+    parametersRef:
+      name: default-egress
+      sectionName: default-egress
+  sourceSelector:
+    selectionMode: NamespaceSelector
+    namespaces:
+      matchNames:
+      - {{ .Namespace }}
+{{- else }}
+apiVersion: k8s.f5net.com/v3
+kind: F5SPKEgress
+metadata:
+  name: default-egress
+  namespace: f5-cne-system
+spec:
+  snatType: SRC_TRANS_AUTOMAP
+  pseudoCNIConfig:
+    namespaces:
+    - {{ .Namespace }}
+    appPodInterface: eth0
+    vxlan:
+      create: true
+      tmmInterfaceName: vlan-int
+{{- end }}

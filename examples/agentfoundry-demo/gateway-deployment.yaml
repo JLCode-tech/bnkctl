@@ -1,0 +1,160 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: poc-dual-interface-gatewayclass
+spec:
+  controllerName: f5.com/f5-cne-system-f5-cne-controller
+  description: F5 BIG-IP Kubernetes Gateway
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: mcp-tls
+  namespace: default
+spec:
+  secretName: mcp-tls
+  duration: 2160h
+  renewBefore: 360h
+  commonName: bnk-ingress.bnk-demo.internal
+  dnsNames:
+  - bnk-ingress.bnk-demo.internal
+  issuerRef:
+    name: poc-dual-interface-ca-cluster-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agentfoundry
+---
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: GatewaySettings
+metadata:
+  name: azrbnkctl-default
+  namespace: agentfoundry
+spec:
+  egressConfigs:
+  - hardwareAcceleration: none
+    name: default-egress
+    networkRef:
+      name: int-vlan-infra
+    sourceNATConfig:
+      type: Automap
+  ingressConfig:
+    defaultListenerNetwork:
+      ipamRefs:
+      - name: listener-pool
+      networkRefs:
+      - name: ext-vlan-infra
+      sourceNATConfig:
+        type: Automap
+---
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: GatewaySettings
+metadata:
+  name: azrbnkctl-default
+  namespace: default
+spec:
+  egressConfigs:
+  - hardwareAcceleration: none
+    name: default-egress
+    networkRef:
+      name: int-vlan-infra
+    sourceNATConfig:
+      type: Automap
+  ingressConfig:
+    defaultListenerNetwork:
+      ipamRefs:
+      - name: listener-pool
+      networkRefs:
+      - name: ext-vlan-infra
+      sourceNATConfig:
+        type: Automap
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: bnk-agentfoundry-demo-gateway
+  namespace: default
+spec:
+  gatewayClassName: poc-dual-interface-gatewayclass
+  infrastructure:
+    parametersRef:
+      group: gateway.k8s.f5.com
+      kind: GatewaySettings
+      name: azrbnkctl-default
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: All
+      kinds:
+      - kind: HTTPRoute
+  - name: https
+    protocol: HTTPS
+    port: 443
+    tls:
+      certificateRefs:
+      - kind: Secret
+        group: ""
+        name: mcp-tls
+        namespace: default
+    allowedRoutes:
+      namespaces:
+        from: All
+      kinds:
+      - kind: HTTPRoute
+  addresses:
+  - type: IPAddress
+    value: 10.0.17.100
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: mcp-financial-route
+  namespace: default
+spec:
+  parentRefs:
+  - name: bnk-agentfoundry-demo-gateway
+  hostnames:
+  - "bnk-ingress.bnk-demo.internal"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /v1/mcp/forecast
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          type: ReplacePrefixMatch
+          replacePrefixMatch: /
+    # The upstream MCP server exposes streamable-http at root (/).
+    # Both Azure AI Foundry Agent and external-agent.py POST to
+    # /v1/mcp/forecast; this rewrite strips the prefix so the
+    # tool pod receives the call at /.
+    backendRefs:
+    - name: mcp-financial-tool
+      port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: mcp-discovery-route
+  namespace: default
+spec:
+  parentRefs:
+  - name: bnk-agentfoundry-demo-gateway
+  hostnames:
+  - "bnk-ingress.bnk-demo.internal"
+  rules:
+  - matches:
+    - path:
+        type: Exact
+        value: /.well-known/agent-card.json
+    backendRefs:
+    - name: mcp-financial-tool
+      port: 80

@@ -1,0 +1,205 @@
+apiVersion: k8s.f5net.com/v1
+kind: F5BigCneIrule
+metadata:
+  name: mcp-rate-limit-irule
+  namespace: default
+spec:
+  iRule: |
+    when RULE_INIT {
+        set static::mcp_privileged_tools [list "get_account_balance"]
+        set static::mcp_privileged_token "demo-agent-token-a7f3c1"
+        set static::mcp_external_token "demo-external-token-4b9e2d"
+    }
+    when HTTP_REQUEST {
+        set gov_t0 [clock clicks -milliseconds]
+        set gov_bearer ""
+        if { [HTTP::header exists "Authorization"] } {
+            set gov_bearer [string range [HTTP::header "Authorization"] 7 end]
+        }
+        set gov_client [IP::client_addr]
+        set gov_uri [HTTP::uri]
+        set gov_req ""
+        set gov_resp ""
+        set gov_userq [HTTP::uri]
+        set gov_method ""
+        set gov_tool ""
+        set gov_session ""
+        if { [HTTP::header exists "Mcp-Session-Id"] } {
+            set gov_session [string range [HTTP::header "Mcp-Session-Id"] 0 35]
+        }
+        set gov_transport "http"
+        if { [string tolower [HTTP::header "Accept"]] contains "text/event-stream" } { set gov_transport "sse" }
+        if { [string tolower [HTTP::header "Upgrade"]] equals "websocket" } { set gov_transport "ws" }
+
+        set gov_caller "anonymous"
+        if { $gov_bearer eq $static::mcp_privileged_token } { set gov_caller "agent" }
+        if { $gov_bearer eq $static::mcp_external_token } { set gov_caller "external" }
+
+        set gov_key $gov_caller
+        if { $gov_caller eq "anonymous" } { set gov_key "ip:$gov_client" }
+
+        set gov_mcp 0
+        if { [HTTP::path] starts_with "/v1/mcp/forecast" } { set gov_mcp 1 }
+        if { [HTTP::path] equals "/" } { set gov_mcp 1 }
+        if { $gov_mcp == 0 } { return }
+
+        set cur_window [expr {[clock seconds] / 60}]
+        set win_key "${gov_key}:${cur_window}"
+        set gov_count 1
+        catch {
+            set cur [table lookup -subtable "mcp_rl" $win_key]
+            if { $cur eq "" } {
+                table set -subtable "mcp_rl" $win_key 1 120 120
+                set gov_count 1
+            } else {
+                set gov_count [expr {$cur + 1}]
+                table set -subtable "mcp_rl" $win_key $gov_count 120 120
+            }
+        }
+
+        if { $gov_count > 10 } {
+            log local0. "BNKGOV {\"job\":\"llm-gateway\",\"model\":\"mcp:finance-tool\",\"status\":\"429\",\"latency_ms\":0,\"prompt_tk\":0,\"comp_tk\":0,\"total_tk\":0,\"cached\":0,\"cost\":0,\"userq\":\"$gov_uri\",\"client\":\"$gov_client\",\"caller\":\"$gov_caller\",\"action\":\"rate_limited\",\"req_body\":\"\",\"resp_body\":\"rate limit exceeded\",\"rpc_method\":\"$gov_method\",\"tool\":\"$gov_tool\",\"session\":\"$gov_session\",\"transport\":\"$gov_transport\"}"
+            HTTP::respond 429 \
+                content "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32000,\"message\":\"rate limit exceeded: 10 requests per 60s per caller\"}}" \
+                "Content-Type" "application/json" \
+                "Retry-After" "60"
+            return
+        }
+
+        if { [HTTP::header exists "Content-Length"] } {
+            set gov_clen [HTTP::header "Content-Length"]
+            if { $gov_clen > 0 && $gov_clen <= 4096 } {
+                HTTP::collect $gov_clen
+            }
+        }
+    }
+    when HTTP_REQUEST_DATA {
+        set gov_req [string map {\\ \\\\ \" \\\" \n {} \r {} \t { }} [HTTP::payload]]
+        if { [string length $gov_req] > 280 } {
+            set gov_req [string range $gov_req 0 279]
+            if { [string index $gov_req end] eq "\\" } { set gov_req [string range $gov_req 0 end-1] }
+            append gov_req {[clipped]}
+        }
+        set gov_method [findstr [HTTP::payload] "\"method\":\"" 10 "\""]
+        if { $gov_method eq "" } {
+            set gov_method [findstr [HTTP::payload] "\"method\": \"" 11 "\""]
+        }
+        set gov_tool [findstr [HTTP::payload] "\"name\":\"" 8 "\""]
+        if { $gov_tool eq "" } {
+            set gov_tool [findstr [HTTP::payload] "\"name\": \"" 9 "\""]
+        }
+        if { $gov_method ne "" } { set gov_userq "$gov_method $gov_tool" }
+
+        if { $gov_method eq "tools/call" && [lsearch -exact $static::mcp_privileged_tools $gov_tool] != -1 } {
+            if { $gov_bearer ne $static::mcp_privileged_token } {
+                log local0. "BNKGOV {\"job\":\"llm-gateway\",\"model\":\"mcp:finance-tool\",\"status\":\"403\",\"latency_ms\":0,\"prompt_tk\":0,\"comp_tk\":0,\"total_tk\":0,\"cached\":0,\"cost\":0,\"userq\":\"$gov_userq\",\"client\":\"$gov_client\",\"caller\":\"$gov_caller\",\"action\":\"tool_forbidden\",\"req_body\":\"$gov_req\",\"resp_body\":\"privileged tool\",\"rpc_method\":\"$gov_method\",\"tool\":\"$gov_tool\",\"session\":\"$gov_session\",\"transport\":\"$gov_transport\"}"
+                HTTP::respond 403 \
+                    content "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32003,\"message\":\"tool '$gov_tool' requires a privileged caller\"}}" \
+                    "Content-Type" "application/json"
+                return
+            }
+        }
+        HTTP::release
+    }
+    when HTTP_RESPONSE {
+        if { ![info exists gov_mcp] } { return }
+        if { $gov_mcp == 0 } { return }
+        set gov_status [HTTP::status]
+        set gov_action "allow"
+        if { $gov_status >= 400 } { set gov_action "backend_refused" }
+        if { [HTTP::header exists "Content-Length"] } {
+            set gov_clen [HTTP::header "Content-Length"]
+            if { $gov_clen > 0 && $gov_clen <= 4096 } {
+                HTTP::collect $gov_clen
+                return
+            }
+        }
+        set gov_lat [expr {[clock clicks -milliseconds] - $gov_t0}]
+        log local0. "BNKGOV {\"job\":\"llm-gateway\",\"model\":\"mcp:finance-tool\",\"status\":\"$gov_status\",\"latency_ms\":$gov_lat,\"prompt_tk\":0,\"comp_tk\":0,\"total_tk\":0,\"cached\":0,\"cost\":0,\"userq\":\"$gov_userq\",\"client\":\"$gov_client\",\"caller\":\"$gov_caller\",\"action\":\"$gov_action\",\"req_body\":\"$gov_req\",\"resp_body\":\"\",\"rpc_method\":\"$gov_method\",\"tool\":\"$gov_tool\",\"session\":\"$gov_session\",\"transport\":\"$gov_transport\"}"
+    }
+    when HTTP_RESPONSE_DATA {
+        set gov_resp [string map {\\ \\\\ \" \\\" \n {} \r {} \t { }} [HTTP::payload]]
+        if { [string length $gov_resp] > 280 } {
+            set gov_resp [string range $gov_resp 0 279]
+            if { [string index $gov_resp end] eq "\\" } { set gov_resp [string range $gov_resp 0 end-1] }
+            append gov_resp {[clipped]}
+        }
+        set gov_lat [expr {[clock clicks -milliseconds] - $gov_t0}]
+        log local0. "BNKGOV {\"job\":\"llm-gateway\",\"model\":\"mcp:finance-tool\",\"status\":\"$gov_status\",\"latency_ms\":$gov_lat,\"prompt_tk\":0,\"comp_tk\":0,\"total_tk\":0,\"cached\":0,\"cost\":0,\"userq\":\"$gov_userq\",\"client\":\"$gov_client\",\"caller\":\"$gov_caller\",\"action\":\"$gov_action\",\"req_body\":\"$gov_req\",\"resp_body\":\"$gov_resp\",\"rpc_method\":\"$gov_method\",\"tool\":\"$gov_tool\",\"session\":\"$gov_session\",\"transport\":\"$gov_transport\"}"
+        HTTP::release
+    }
+---
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: NetPolicy
+metadata:
+  name: mcp-net-policy-http
+  namespace: default
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: bnk-vertex-demo-gateway
+    sectionName: http
+  extensionRefs:
+  - group: k8s.f5net.com
+    kind: F5BigCneIrule
+    name: mcp-rate-limit-irule
+  - group: k8s.f5net.com
+    kind: F5BigPersistenceProfile
+    name: mcp-session
+---
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: NetPolicy
+metadata:
+  name: mcp-net-policy-https
+  namespace: default
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: bnk-vertex-demo-gateway
+    sectionName: https
+  extensionRefs:
+  - group: k8s.f5net.com
+    kind: F5BigCneIrule
+    name: mcp-rate-limit-irule
+  - group: k8s.f5net.com
+    kind: F5BigPersistenceProfile
+    name: mcp-session
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5BigFwPolicy
+metadata:
+  name: mcp-firewall
+  namespace: default
+spec:
+  rule:
+  - name: allow-vpc-callers
+    action: accept
+    logging: true
+    ipProtocol: tcp
+    source:
+      addresses:
+      - 10.0.0.0/8
+    destination:
+      ports:
+      - "80"
+      - "443"
+  - name: reject-everything-else
+    action: reject
+    logging: true
+---
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: SecPolicy
+metadata:
+  name: mcp-sec-policy
+  namespace: default
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: bnk-vertex-demo-gateway
+  extensionRefs:
+  - group: k8s.f5net.com
+    kind: F5BigFwPolicy
+    name: mcp-firewall

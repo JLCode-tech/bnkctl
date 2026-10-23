@@ -1,0 +1,20 @@
+# EgressGateway (BNK 2.4): every pod in the scenario namespace sends its
+# outbound traffic through TMM, where a wildcard virtual server (0.0.0.0:0)
+# applies the SNAT and network settings of the referenced egressConfigs entry.
+# It must live in the same namespace as the GatewaySettings it references.
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: EgressGateway
+metadata:
+  name: {{.EgressName}}
+  namespace: {{.Namespace}}
+spec:
+  gatewayClassName: {{.GatewayClassName}}
+  infrastructure:
+    parametersRef:
+      name: {{.EgressName}}
+      sectionName: {{.EgressConfig}}
+  sourceSelector:
+    selectionMode: NamespaceSelector
+    namespaces:
+      matchNames:
+      - {{.Namespace}}

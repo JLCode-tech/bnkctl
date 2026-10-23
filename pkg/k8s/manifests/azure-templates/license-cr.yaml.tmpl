@@ -1,0 +1,8 @@
+apiVersion: k8s.f5net.com/v1
+kind: License
+metadata:
+  name: bnk-license
+  namespace: f5-cne-core
+spec:
+  operationMode: connected
+  jwt: "{{ .JWT }}"

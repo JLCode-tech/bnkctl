@@ -1,0 +1,59 @@
+apiVersion: awsbnkctl/v1
+kind: Cluster
+
+metadata:
+  name: lz-hamburg
+  region: eu-central-1
+  labels:
+    purpose: bnk-localzone-hamburg
+    environment: edge-lz
+
+pattern: host-device
+
+network:
+  vpcCidr: 10.101.0.0/16
+
+  azs:
+    - eu-central-1a
+    - eu-central-1b
+    - eu-central-1-ham-1a
+
+  subnets:
+    public:
+      - cidr: 10.101.1.0/24
+        az: eu-central-1a
+      - cidr: 10.101.2.0/24
+        az: eu-central-1b
+      - cidr: 10.101.3.0/24
+        az: eu-central-1-ham-1a
+
+    private:
+      - cidr: 10.101.11.0/24
+        az: eu-central-1a
+      - cidr: 10.101.12.0/24
+        az: eu-central-1b
+
+  dataPath:
+    external:
+      cidr: 10.101.10.0/24
+      az: eu-central-1-ham-1a
+    internal:
+      cidr: 10.101.20.0/24
+      az: eu-central-1-ham-1a
+
+  natGateways: 1
+
+cluster:
+  kubernetesVersion: "1.35"
+  nodeGroups:
+    - name: lz-workers
+      instanceType: m5.2xlarge
+      desiredSize: 3
+      minSize: 3
+      maxSize: 4
+      diskSize: 50
+
+bnk:
+  farArchive: ../../cne_pull_64.json
+  jwt: ../../license.jwt
+  bgp: false
