@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Clouds](https://img.shields.io/badge/Clouds-AWS%20EKS%20%7C%20Azure%20AKS%20%7C%20GCP%20GKE-orange)](#supported-clouds--binaries)
 
-`bnkctl` is a **pure-Go, multi-cloud lifecycle and validation CLI** for deploying, operating, upgrading, benchmarking, and tearing down **F5 BIG-IP Next for Kubernetes (BNK)** and **F5 BNK AI Service Plane** estates across **Amazon EKS**, **Azure AKS**, and **Google Cloud GKE** — with zero Terraform, zero shell-script glue, and native integration with [**F5 BNK Forge**](https://github.com/JLCode-tech/bnk-forge).
+`bnkctl` is a **pure-Go, multi-cloud lifecycle and validation CLI** for deploying, operating, upgrading, benchmarking, and tearing down **F5 BIG-IP Next for Kubernetes (BNK)** and **F5 BNK AI Service Plane** estates across **Amazon EKS**, **Azure AKS**, and **Google Cloud GKE** — and native integration with [**F5 BNK Forge**](https://github.com/JLCode-tech/bnk-forge).
 
 ![BNK Forge Multi-Cloud Platform Overview](docs/assets/forge-platform-overview.png)
 
@@ -12,13 +12,13 @@
 
 ## Why `bnkctl`?
 
-Deploying a production-grade Cloud-Native Network Function (CNF) and **F5 BNK AI Service Plane** across three hyperscalers traditionally requires stitching together cloud-specific Terraform modules, CNI plumbing, secondary NIC attachments, BGP route servers, Helm charts, and post-install reconciliations.
+Deploying a **BIG-IP Next for Kubernetes (BNK)** and **F5 BNK AI Service Plane** across three hyperscalers traditionally requires stitching together cloud-specific Terraform modules, CNI plumbing, secondary NIC attachments, BGP route servers, Helm charts, and post-install reconciliations.
 
 `bnkctl` replaces that complexity with **one declarative `cluster.yaml` intent file** and **one unified Go engine**:
 
 - **One Engine, Four Binaries**: Produces the unified multi-cloud `bnkctl` binary (`--cloud aws|azure|gcp` or auto-detected from `cluster.yaml`) alongside cloud-pinned binaries (`awsbnkctl`, `azrbnkctl`, `gkebnkctl`) for drop-in backward compatibility.
 - **Pure Cloud & Kubernetes SDKs**: Provisions VPCs/VNets, secondary data-plane subnets, multi-NIC worker pools, security groups, NAT gateways, and managed Kubernetes clusters directly via `aws-sdk-go-v2`, `azure-sdk-for-go`, `cloud.google.com/go`, `client-go`, and the Helm v3 Go SDK.
-- **Version-Aware BNK Release Catalog**: Built-in support for BNK **2.3.x** (`legacy-spk`), **2.4.0**, **2.4.1**, and **2.5.0** (`gateway-infra`), including automatic release-quirk self-healing (`bnkctl heal`) and cross-train migration (`bnkctl migrate`). See the [F5 BIG-IP Next for Kubernetes CloudDocs](https://clouddocs.f5.com/bigip-next-for-kubernetes/latest/overview.html) for full platform documentation.
+- **Version-Aware BNK Release Catalog**: Built-in support for BNK **2.3.x** (`legacy-spk`), **2.4.0**, **2.4.1**, and **future release** (`gateway-infra`), including automatic release-quirk self-healing (`bnkctl heal`) and cross-train migration (`bnkctl migrate`). See the [F5 BIG-IP Next for Kubernetes CloudDocs](https://clouddocs.f5.com/bigip-next-for-kubernetes/latest/overview.html) for full platform documentation.
 - **Turnkey BNK Forge & F5 BNK AI Service Plane**: Automatically registers clusters with [**F5 BNK Forge**](https://github.com/JLCode-tech/bnk-forge) during `bnkctl up`, seeds multi-cloud AI Token Governance and Smart LLM Routing across **AWS Bedrock**, **Azure AI Foundry**, and **Google Vertex AI**, and cleans up on `bnkctl down`.
 - **Zero-Leak Teardown**: Deterministic reverse-dependency teardown (`bnkctl down`) strips stuck Kubernetes finalizers, removes cloud load balancers and secondary ENIs/NICs, deletes the cluster and network underlay, and unregisters from [BNK Forge](https://github.com/JLCode-tech/bnk-forge).
 
@@ -181,7 +181,7 @@ You can validate any `cluster.yaml` and preview the full underlay + BNK overlay 
 | `bnkctl doctor` | Verify local prerequisites, cloud credentials, registry pull credentials, and subscription JWT validity |
 | `bnkctl heal` | Run idempotent BNK self-healing and version-specific quirk reconciliations |
 | `bnkctl upgrade` | Upgrade BNK overlay in-place within the same architectural release train |
-| `bnkctl migrate` | Migrate BNK overlay across architectural release boundaries (e.g., `2.3.x legacy-spk` -> `2.4.x/2.5.0 gateway-infra`) |
+| `bnkctl migrate` | Migrate BNK overlay across architectural release boundaries (e.g., `2.3.x legacy-spk` -> `2.4.x/future gateway-infra`) |
 | `bnkctl bnk {status,scan,heal,resync,upgrade,migrate}` | Granular BNK overlay inspection, MCP endpoint scanning, and pool-member resynchronization |
 | `bnkctl forge {register,unregister,status,governance}` | Register/unregister clusters with [BNK Forge](https://github.com/JLCode-tech/bnk-forge) and manage Multi-Cluster F5 BNK AI Service Plane governance |
 | `bnkctl scenarios {list,show,run}` | List, inspect, and execute 15 built-in BNK L4/L7, egress, and GenAI validation scenarios |
