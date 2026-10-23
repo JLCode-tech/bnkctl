@@ -14,7 +14,7 @@ model write its answer. That tool call is the hop this demo puts F5 BNK in front
 of. An Amazon Bedrock AgentCore agent, and any other caller, reaches a small MCP
 tool running on EKS only through a BNK Gateway, which authenticates the caller,
 rate-limits it, blocks the privileged tool for callers who may not use it, and
-logs every decision into Loki for BNK Forge to show.
+logs every decision into Loki for [BNK Forge](https://github.com/JLCode-tech/bnk-forge) to show.
 
 ```
   AgentCore agent (VPC ENI) ──┐
@@ -32,12 +32,13 @@ Why this shape, what AgentCore adds, and where its own Gateway would sit are in
 
 ## Prerequisites
 
-- F5 credentials next to `cluster.yaml`: `cne_pull_64.json` and `license.jwt`
-  (gitignored; symlink them in if you keep them elsewhere).
+- F5 BIG-IP Next for Kubernetes subscription JWT (`license.jwt`) and F5 Artifact
+  Registry pull credentials staged next to `cluster.yaml` (gitignored; symlink
+  them in if you keep them elsewhere). See the [F5 BIG-IP Next for Kubernetes CloudDocs](https://clouddocs.f5.com/bigip-next-for-kubernetes/latest/overview.html) for obtaining and configuring these prerequisites.
 - An AWS profile with an SSO session that has more than an hour left; the
   rebuild script refuses to start otherwise.
 - Node.js for the AgentCore CLI (`agent/node_modules/.bin/agentcore`).
-- Optional: a BNK Forge instance on `localhost:8000` for the observability
+- Optional: a [BNK Forge](https://github.com/JLCode-tech/bnk-forge) instance on `localhost:8000` for the observability
   panels.
 
 ## Run it
@@ -72,7 +73,7 @@ one before it.
 | 3 | `awsbnkctl k apply --config cluster.yaml -f gateway-deployment.yaml` | the `GatewaySettings`, the Gateway with listeners on 80 and 443 and both `HTTPRoute`s; `--config` fills in the GatewayClass and CA issuer names from the cluster state |
 | 4 | `scripts/setup-agentcore-network.sh` | reads the VIP off the live Gateway; creates the agent security group, SG-to-SG ingress and the private Route 53 zone |
 | 5 | `awsbnkctl k apply -f mcp-persistence.yaml` | the passphrase Secret and the `MODEL_CONTEXT_PROTOCOL` persistence profile the NetPolicies reference |
-| 6 | `awsbnkctl k apply -f mcp-security-policy.yaml && ./scripts/setup-llm-gateway.sh` | the rate-limit iRule, persistence, firewall, and the BNK 2.4.1 7-step `inference.k8s.f5.com/v1alpha1` AI Gateway chain (`AITenant`, `AICredential`, `AIProvider`, `AIModel`, `AIGatewayProfile`) + `AppPolicy` (`gateway.k8s.f5.com/v1alpha1`) + `F5BigDnsCache` (`net-resolver`) + `F5SPKStaticRoute` |
+| 6 | `awsbnkctl k apply -f mcp-security-policy.yaml && ./scripts/setup-llm-gateway.sh` | the rate-limit iRule, persistence, firewall, and the BNK 2.4.1 **F5 BNK AI Service Plane** configuration (`k8s/bnk-llm-gateway.yaml`, see [F5 CloudDocs](https://clouddocs.f5.com/bigip-next-for-kubernetes/latest/overview.html)) |
 | 7 | `awsbnkctl k apply -f mcp-observability.yaml`, then `scripts/rebuild.sh` step 7 | Loki and the collectors in `llm-egress`; the Bedrock token shipper (`llm-egress`) and the traffic generator (`default`). Apply those two through `rebuild.sh`: it substitutes the account id into the shipper and the live VIP into the generator |
 | 8 | `cd agent && npx agentcore deploy --target demo-v2` | the AgentCore runtime, VPC mode, in the private subnets |
 | 9 | `scripts/setup-stranger.sh` (optional) | an EC2 caller with one NIC inside `10.0.0.0/16` and one outside, so the firewall's reject branch can be shown |
@@ -118,18 +119,17 @@ for i in $(seq 1 12); do curl -s -o /dev/null -w '%{http_code} ' -X POST http://
 # → 200 ×10 then 429 429
 ```
 
-The decisions, in Forge: **Gateway Topology** shows the iRule under each
-listener and the firewall under Security Policies; **Multi-Cluster AI Gateway**
-shows the BNK 2.4.1 `inference.k8s.f5.com/v1alpha1` dependency chain;
+The decisions, in [BNK Forge](https://github.com/JLCode-tech/bnk-forge): **Gateway Topology** shows the iRule under each
+listener and the firewall under Security Policies; **F5 BNK AI Service Plane**
+shows the BNK 2.4.1 inference and governance configuration;
 **LLM Observability** for cluster `bnk-agentcore-demo` shows request counts, the
 429s and latency. Every record also carries `rpc_method`, `tool`, `session` and
 `transport`.
 
-From the CLI, `awsbnkctl forge scan -f cluster.yaml` lists the BNK 2.4.1 readiness
-checks (`AITenant`, `AICredential`, `AIProvider`, `AIModel`, `AIGatewayProfile`,
-`AppPolicy`) and the MCP endpoint with its persistence profile and
+From the CLI, `awsbnkctl forge scan -f cluster.yaml` lists the BNK 2.4.1
+**F5 BNK AI Service Plane** readiness checks and the MCP endpoint with its persistence profile and
 iRule; `awsbnkctl forge governance overview -f cluster.yaml` queries Forge's
-Multi-Cluster AI Gateway & Dependency Fabric (`/api/k8s/clusters/{id}/governance/overview`),
+F5 BNK AI Service Plane & Dependency Fabric (`/api/k8s/clusters/{id}/governance/overview`),
 `awsbnkctl forge governance remediate -f cluster.yaml --action heal_aigw_profile`
 triggers healing, and `awsbnkctl forge governance test-request -f cluster.yaml`
 runs a live verification probe. `awsbnkctl forge telemetry` (after
@@ -147,7 +147,7 @@ Two live model telemetry sources feed the Loki stream, each labelled with `sourc
   model-invocation log group and ships real token counts and costs. Needs
   Bedrock invocation logging turned on in the account.
 - `source=aigateway-241`: `traffic-generator-deployment.yaml` probes the live
-  BNK 2.4.1 AI Gateway (`http://10.0.10.150/v1/chat/completions`) and
+  BNK 2.4.1 **F5 BNK AI Service Plane** (`http://10.0.10.150/v1/chat/completions`) and
   records real HTTP response statuses, latency, and usage token counts.
 
 The generator also drives the live MCP VIP every cycle: a forecast with the agent
@@ -194,11 +194,11 @@ awsbnkctl down -f examples/agentcore-demo/cluster.yaml --yes
 | File | Contains |
 | --- | --- |
 | `cluster.yaml` | the awsbnkctl intent (K8s `1.35`, BNK `2.4.1`, FLO `v2.30.1-0.0.8`, `aiGateway` enabled) |
-| `k8s/bnk-llm-gateway.yaml` (`aigateway-241.yaml`) | BNK 2.4.1 7-step `inference.k8s.f5.com/v1alpha1` chain (`AITenant`, `AICredential`, `AIProvider`, `AIModel`, `AIGatewayProfile`) + `AppPolicy` + `F5BigDnsCache` (`net-resolver`) + `F5SPKStaticRoute` |
+| `k8s/bnk-llm-gateway.yaml` (`aigateway-241.yaml`) | BNK 2.4.1 **F5 BNK AI Service Plane** routing, DNS, and governance manifests (see [F5 CloudDocs](https://clouddocs.f5.com/bigip-next-for-kubernetes/latest/overview.html)) |
 | `mcp-tool/` | the MCP finance tool: `mcp-server.py` and the Kustomize base that generates its ConfigMap and token Secret |
 | `gateway-deployment.yaml` | the `GatewaySettings`, the BNK `Gateway` (80 and 443) and both `HTTPRoute`s |
-| `mcp-persistence.yaml` | passphrase `Secret` and the `F5BigPersistenceProfile` (`MODEL_CONTEXT_PROTOCOL`) that pins each MCP session to one pod |
-| `mcp-security-policy.yaml` | rate-limit iRule, per-listener `NetPolicy` (iRule + persistence profile), `F5BigFwPolicy`, `SecPolicy` |
+| `mcp-persistence.yaml` | passphrase `Secret` and MCP session persistence profile that pins each MCP session to one pod |
+| `mcp-security-policy.yaml` | rate-limit policy, per-listener network policy, L4 firewall, and security policy |
 | `mcp-observability.yaml` | `llm-egress` namespace, Loki, the `bnkgov-collector` DaemonSet |
 | `mcp-bedrock-token-shipper.yaml` | IRSA ServiceAccount and the shipper that copies Bedrock token counts into Loki |
 | `bgp-route-server.yaml` | optional BGP stanza (a ZebOS ConfigMap) for Route Server peering |

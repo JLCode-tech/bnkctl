@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Clouds](https://img.shields.io/badge/Clouds-AWS%20EKS%20%7C%20Azure%20AKS%20%7C%20GCP%20GKE-orange)](#supported-clouds--binaries)
 
-`bnkctl` is a **pure-Go, multi-cloud lifecycle and validation CLI** for deploying, operating, upgrading, benchmarking, and tearing down **F5 BIG-IP Next for Kubernetes (BNK)** and **F5 AI Gateway** estates across **Amazon EKS**, **Azure AKS**, and **Google Cloud GKE** — with zero Terraform, zero shell-script glue, and native integration with **F5 BNK Forge**.
+`bnkctl` is a **pure-Go, multi-cloud lifecycle and validation CLI** for deploying, operating, upgrading, benchmarking, and tearing down **F5 BIG-IP Next for Kubernetes (BNK)** and **F5 BNK AI Service Plane** estates across **Amazon EKS**, **Azure AKS**, and **Google Cloud GKE** — with zero Terraform, zero shell-script glue, and native integration with [**F5 BNK Forge**](https://github.com/JLCode-tech/bnk-forge).
 
 ![BNK Forge Multi-Cloud Platform Overview](docs/assets/forge-platform-overview.png)
 
@@ -12,15 +12,15 @@
 
 ## Why `bnkctl`?
 
-Deploying a production-grade Cloud-Native Network Function (CNF) and AI Gateway across three hyperscalers traditionally requires stitching together cloud-specific Terraform modules, Multus/CNI daemonsets, secondary NIC plumbing, BGP route servers, Helm charts, and post-install CRD reconciliations.
+Deploying a production-grade Cloud-Native Network Function (CNF) and **F5 BNK AI Service Plane** across three hyperscalers traditionally requires stitching together cloud-specific Terraform modules, CNI plumbing, secondary NIC attachments, BGP route servers, Helm charts, and post-install reconciliations.
 
 `bnkctl` replaces that complexity with **one declarative `cluster.yaml` intent file** and **one unified Go engine**:
 
 - **One Engine, Four Binaries**: Produces the unified multi-cloud `bnkctl` binary (`--cloud aws|azure|gcp` or auto-detected from `cluster.yaml`) alongside cloud-pinned binaries (`awsbnkctl`, `azrbnkctl`, `gkebnkctl`) for drop-in backward compatibility.
 - **Pure Cloud & Kubernetes SDKs**: Provisions VPCs/VNets, secondary data-plane subnets, multi-NIC worker pools, security groups, NAT gateways, and managed Kubernetes clusters directly via `aws-sdk-go-v2`, `azure-sdk-for-go`, `cloud.google.com/go`, `client-go`, and the Helm v3 Go SDK.
-- **Version-Aware BNK Release Catalog**: Built-in support for BNK **2.3.x** (`legacy-spk`), **2.4.0**, **2.4.1**, and **2.5.0** (`gateway-infra`), including automatic release-quirk self-healing (`bnkctl heal`) and cross-train migration (`bnkctl migrate`).
-- **Turnkey BNK Forge & AI Service Plane**: Automatically registers clusters with **F5 BNK Forge** during `bnkctl up`, seeds multi-cloud AI Token Governance and Smart LLM Routing across **AWS Bedrock**, **Azure AI Foundry**, and **Google Vertex AI**, and cleans up on `bnkctl down`.
-- **Zero-Leak Teardown**: Deterministic reverse-dependency teardown (`bnkctl down`) strips stuck Kubernetes finalizers, removes cloud load balancers and secondary ENIs/NICs, deletes the cluster and network underlay, and unregisters from BNK Forge.
+- **Version-Aware BNK Release Catalog**: Built-in support for BNK **2.3.x** (`legacy-spk`), **2.4.0**, **2.4.1**, and **2.5.0** (`gateway-infra`), including automatic release-quirk self-healing (`bnkctl heal`) and cross-train migration (`bnkctl migrate`). See the [F5 BIG-IP Next for Kubernetes CloudDocs](https://clouddocs.f5.com/bigip-next-for-kubernetes/latest/overview.html) for full platform documentation.
+- **Turnkey BNK Forge & F5 BNK AI Service Plane**: Automatically registers clusters with [**F5 BNK Forge**](https://github.com/JLCode-tech/bnk-forge) during `bnkctl up`, seeds multi-cloud AI Token Governance and Smart LLM Routing across **AWS Bedrock**, **Azure AI Foundry**, and **Google Vertex AI**, and cleans up on `bnkctl down`.
+- **Zero-Leak Teardown**: Deterministic reverse-dependency teardown (`bnkctl down`) strips stuck Kubernetes finalizers, removes cloud load balancers and secondary ENIs/NICs, deletes the cluster and network underlay, and unregisters from [BNK Forge](https://github.com/JLCode-tech/bnk-forge).
 
 ---
 
@@ -48,27 +48,27 @@ make build
 
 ---
 
-## What You Can Build with `bnkctl` + BNK Forge
+## What You Can Build with `bnkctl` + [BNK Forge](https://github.com/JLCode-tech/bnk-forge)
 
-When `forge.enabled: true` is set in your `cluster.yaml`, `bnkctl up` automatically bridges your cloud Kubernetes cluster into **BNK Forge** — giving you a visual control plane for CNF lifecycle, security policy authoring, multi-cloud AI token governance, and LLM benchmarking.
+When `forge.enabled: true` is set in your `cluster.yaml`, `bnkctl up` automatically bridges your cloud Kubernetes cluster into [**BNK Forge**](https://github.com/JLCode-tech/bnk-forge) — giving you a visual control plane for CNF lifecycle, security policy authoring, multi-cloud AI token governance, and LLM benchmarking.
 
 ### 1. Unified Multi-Cloud Cluster Fleet & Blueprints Catalog
 
-As soon as `bnkctl up` completes Phase 29 (Forge Registration), your AWS EKS, Azure AKS, and GCP GKE clusters appear in the **BNK Forge Cluster Fleet** with live TMM pod telemetry, Gateway API listeners, L4/L7 routes, and one-click deployable **Multi-Cloud Blueprints**.
+As soon as `bnkctl up` completes Phase 29 (Forge Registration), your AWS EKS, Azure AKS, and GCP GKE clusters appear in the [**BNK Forge**](https://github.com/JLCode-tech/bnk-forge) **Cluster Fleet** with live data-plane telemetry, active listeners, L4/L7 routes, and one-click deployable **Multi-Cloud Blueprints**.
 
 ![Unified Multi-Cloud Cluster Fleet](docs/assets/forge-multi-cloud-cluster-fleet.png)
 
 ![Deployable Multi-Cloud Blueprints Catalog](docs/assets/forge-blueprints-catalog.png)
 
-### 2. Visual BNK Firewall, CGNAT, DNS & Security Policy Builder
+### 2. Visual Network Security & Traffic Policy Management
 
-Design and push F5 BNK firewall rules, AFM security policies, CGNAT pools, and Gateway API `HTTPRoute` / `L4Route` configurations visually, or reconcile them declaratively from `bnkctl`:
+Author, visualize, and enforce L4/L7 traffic routing, carrier-grade network translation, DNS delivery, and zero-trust security policies across your Kubernetes clusters from a single visual interface or declaratively via `bnkctl`. For complete details on F5 BIG-IP Next for Kubernetes traffic and security capabilities, see the [F5 BIG-IP Next for Kubernetes CloudDocs](https://clouddocs.f5.com/bigip-next-for-kubernetes/latest/overview.html).
 
 ![BNK Visual Policy Builder](docs/assets/forge-bnk-policy-builder.png)
 
-### 3. Multi-Cloud AI Token Governance & Data Guardrails
+### 3. F5 BNK AI Service Plane: Token Governance & Data Guardrails
 
-For BNK 2.4.1+ clusters with `bnk.aiGateway.enabled: true`, `bnkctl` provisions the F5 AI Gateway (`f5-ai-gateway`), Redis/DSSM state store, and OTEL token-telemetry collectors. BNK Forge provides real-time **Token Governance**, budget enforcement, PII/DLP guardrails, and prompt-injection protection across every cloud:
+Deliver enterprise-grade AI traffic governance across every cloud with real-time token accounting, budget and rate enforcement, sensitive data (PII/DLP) guardrails, and prompt-injection protection managed through [**BNK Forge**](https://github.com/JLCode-tech/bnk-forge). Learn more about F5's cloud-native data plane and AI traffic capabilities in the [F5 BIG-IP Next for Kubernetes CloudDocs](https://clouddocs.f5.com/bigip-next-for-kubernetes/latest/overview.html).
 
 ![Multi-Cloud AI Token Governance Overview](docs/assets/forge-ai-token-governance-overview.png)
 
@@ -84,13 +84,13 @@ Route agentic and inference traffic across primary and fallback foundation model
 
 ### 5. Automated GenAI & Dataplane Benchmarking (`aiperf` + 15 Built-in Scenarios)
 
-Compare throughput, Time-to-First-Token (TTFT), Inter-Token Latency (ITL), and token-rate enforcement across **F5 BNK + F5 GAIE**, Envoy AI Gateway, HAProxy, and `llm-d` Router, or run any of the 15 built-in Kubernetes validation scenarios (`bnkctl scenarios run`):
+Compare throughput, Time-to-First-Token (TTFT), Inter-Token Latency (ITL), and token-rate enforcement across **F5 BNK + F5 GAIE**, Envoy, HAProxy, and `llm-d` Router, or run any of the 15 built-in Kubernetes validation scenarios (`bnkctl scenarios run`):
 
 ![Multi-Stack Benchmark Dashboard](docs/assets/forge-benchmark-dashboard.png)
 
 ### 6. AI-Assisted Day-2 Operations via 153 MCP Server Tools
 
-Every cluster registered by `bnkctl` can be inspected, diagnosed, and operated through BNK Forge's built-in **Model Context Protocol (MCP) Server**, exposing 153 structured tools for AI assistants and automation pipelines:
+Every cluster registered by `bnkctl` can be inspected, diagnosed, and operated through [BNK Forge](https://github.com/JLCode-tech/bnk-forge)'s built-in **Model Context Protocol (MCP) Server**, exposing 153 structured tools for AI assistants and automation pipelines:
 
 ![BNK Forge MCP Server Tools](docs/assets/forge-mcp-server-tools.png)
 
@@ -101,9 +101,8 @@ Every cluster registered by `bnkctl` can be inspected, diagnosed, and operated t
 ### Prerequisites
 
 1. **Go 1.26+** (to build from source)
-2. **F5 BNK Credentials** (gitignored locally; never committed):
-   - `license.jwt` — F5 BNK subscription JWT
-   - `cne_pull_64.json` (or `dockerconfig.json`) — F5 Artifact Registry (`repo.f5.com`) pull secret
+2. **F5 BIG-IP Next for Kubernetes License & Registry Access** (gitignored locally; never committed):
+   - Follow the [F5 BIG-IP Next for Kubernetes CloudDocs](https://clouddocs.f5.com/bigip-next-for-kubernetes/latest/overview.html) to obtain your F5 subscription JWT (`license.jwt`) and configure F5 Artifact Registry (`repo.f5.com`) pull credentials.
 3. **Cloud Credentials** for your target cloud:
    - **AWS**: AWS CLI / SSO profile (`aws sts get-caller-identity`)
    - **Azure**: Azure CLI session (`az login`) or Service Principal env vars
@@ -122,15 +121,15 @@ make build
 You can validate any `cluster.yaml` and preview the full underlay + BNK overlay execution plan without touching live cloud APIs:
 
 ```bash
-# AWS EKS + Bedrock AgentCore + BNK 2.4.1 AI Gateway
+# AWS EKS + Bedrock AgentCore + F5 BNK AI Service Plane (2.4.1)
 ./bin/bnkctl validate -c examples/agentcore-demo/cluster.yaml
 ./bin/bnkctl up -c examples/agentcore-demo/cluster.yaml --dry-run
 
-# Azure AKS + Azure AI Foundry + BNK 2.4.1 AI Gateway
+# Azure AKS + Azure AI Foundry + F5 BNK AI Service Plane (2.4.1)
 ./bin/bnkctl validate -c examples/agentfoundry-demo/cluster.yaml
 ./bin/bnkctl up -c examples/agentfoundry-demo/cluster.yaml --dry-run
 
-# GCP GKE + Vertex AI Gemini + BNK 2.4.1 AI Gateway
+# GCP GKE + Vertex AI Gemini + F5 BNK AI Service Plane (2.4.1)
 ./bin/bnkctl validate -c examples/vertex-agent-demo/cluster.yaml
 ./bin/bnkctl up -c examples/vertex-agent-demo/cluster.yaml --dry-run
 ```
@@ -157,7 +156,7 @@ You can validate any `cluster.yaml` and preview the full underlay + BNK overlay 
 ./bin/bnkctl heal -c examples/agentcore-demo/cluster.yaml
 ./bin/bnkctl bnk resync -c examples/agentcore-demo/cluster.yaml
 
-# Verify F5 Forge registration & Multi-Cluster AI Governance readiness
+# Verify BNK Forge registration & F5 BNK AI Service Plane governance readiness
 ./bin/bnkctl forge status -c examples/agentcore-demo/cluster.yaml
 ./bin/bnkctl forge governance overview -c examples/agentcore-demo/cluster.yaml
 
@@ -175,19 +174,19 @@ You can validate any `cluster.yaml` and preview the full underlay + BNK overlay 
 
 | Command | Description |
 | :--- | :--- |
-| `bnkctl up` | Provision cloud underlay (VPC/VNet, subnets, cluster, secondary NICs) and deploy the BNK overlay stack + Forge registration |
-| `bnkctl down` | Tear down BNK overlay, strip stuck finalizers, unregister from Forge, and destroy all cloud underlay resources |
+| `bnkctl up` | Provision cloud underlay (VPC/VNet, subnets, cluster, secondary NICs) and deploy the BNK overlay stack + [BNK Forge](https://github.com/JLCode-tech/bnk-forge) registration |
+| `bnkctl down` | Tear down BNK overlay, strip stuck finalizers, unregister from [BNK Forge](https://github.com/JLCode-tech/bnk-forge), and destroy all cloud underlay resources |
 | `bnkctl status` | Inspect cloud underlay state, BNK release train/profile, TMM dataplane readiness, and active release quirks |
 | `bnkctl validate` | Validate `cluster.yaml` intent and dry-run render all BNK overlay manifests |
-| `bnkctl doctor` | Verify local prerequisites, cloud credentials, FAR pull secret, and subscription JWT validity |
+| `bnkctl doctor` | Verify local prerequisites, cloud credentials, registry pull credentials, and subscription JWT validity |
 | `bnkctl heal` | Run idempotent BNK self-healing and version-specific quirk reconciliations |
 | `bnkctl upgrade` | Upgrade BNK overlay in-place within the same architectural release train |
 | `bnkctl migrate` | Migrate BNK overlay across architectural release boundaries (e.g., `2.3.x legacy-spk` -> `2.4.x/2.5.0 gateway-infra`) |
 | `bnkctl bnk {status,scan,heal,resync,upgrade,migrate}` | Granular BNK overlay inspection, MCP endpoint scanning, and pool-member resynchronization |
-| `bnkctl forge {register,unregister,status,governance}` | Register/unregister clusters with BNK Forge and manage Multi-Cluster AI Gateway governance |
+| `bnkctl forge {register,unregister,status,governance}` | Register/unregister clusters with [BNK Forge](https://github.com/JLCode-tech/bnk-forge) and manage Multi-Cluster F5 BNK AI Service Plane governance |
 | `bnkctl scenarios {list,show,run}` | List, inspect, and execute 15 built-in BNK L4/L7, egress, and GenAI validation scenarios |
 | `bnkctl test {connectivity,dns}` | Execute TCP/UDP VIP connectivity and DNS probes from the cluster jumphost or probe pod |
-| `bnkctl genai parse` | Parse `aiperf` benchmark artifacts into structured BNK Forge GenAI telemetry |
+| `bnkctl genai parse` | Parse `aiperf` benchmark artifacts into structured [BNK Forge](https://github.com/JLCode-tech/bnk-forge) GenAI telemetry |
 | `bnkctl k` | In-process Kubernetes `client-go` operations with automatic cluster template variable rendering |
 | `bnkctl topology` | Render cluster network and TMM dataplane interface topology |
 
@@ -197,9 +196,9 @@ You can validate any `cluster.yaml` and preview the full underlay + BNK overlay 
 
 | Directory | Cloud | Architecture & Use Case |
 | :--- | :--- | :--- |
-| [`examples/agentcore-demo/`](examples/agentcore-demo/) | **AWS EKS** | Full BNK 2.4.1 AI Gateway + AWS Bedrock AgentCore + MCP Tool Security + AWS Route Server BGP |
-| [`examples/agentfoundry-demo/`](examples/agentfoundry-demo/) | **Azure AKS** | Dual-Interface Accelerated Networking AKS + BNK 2.4.1 AI Gateway + Azure AI Foundry + MCP Token Shipper |
-| [`examples/vertex-agent-demo/`](examples/vertex-agent-demo/) | **GCP GKE** | Multi-VPC Jumbo-Frame GKE + BNK 2.4.1 AI Gateway + Google Vertex AI (Gemini 2.5 Pro/Flash) + VXLAN Egress |
+| [`examples/agentcore-demo/`](examples/agentcore-demo/) | **AWS EKS** | Full F5 BNK AI Service Plane (2.4.1) + AWS Bedrock AgentCore + MCP Tool Security + AWS Route Server BGP |
+| [`examples/agentfoundry-demo/`](examples/agentfoundry-demo/) | **Azure AKS** | Dual-Interface Accelerated Networking AKS + F5 BNK AI Service Plane (2.4.1) + Azure AI Foundry + MCP Token Shipper |
+| [`examples/vertex-agent-demo/`](examples/vertex-agent-demo/) | **GCP GKE** | Multi-VPC Jumbo-Frame GKE + F5 BNK AI Service Plane (2.4.1) + Google Vertex AI (Gemini 2.5 Pro/Flash) + VXLAN Egress |
 | [`examples/local-zone-boston/`](examples/local-zone-boston/) | **AWS Local Zone** | Low-latency Edge BNK deployment in `us-east-1-bos-1a` (`host-device` data path) |
 | [`examples/local-zone-losangeles/`](examples/local-zone-losangeles/) | **AWS Local Zone** | Low-latency Edge BNK deployment in `us-west-2-lax-1a` |
 | [`examples/local-zone-hamburg/`](examples/local-zone-hamburg/) | **AWS Local Zone** | Low-latency Edge BNK deployment in `eu-central-1-ham-1a` |
@@ -212,8 +211,9 @@ You can validate any `cluster.yaml` and preview the full underlay + BNK overlay 
 ## Documentation Index
 
 - [**Architecture & Unified Engine Design (`docs/ARCHITECTURE.md`)**](docs/ARCHITECTURE.md) — How `bnkctl` unifies AWS EKS, Azure AKS, and GCP GKE behind a single `provider.Provider` interface and shared `pkg/bnkengine`.
-- [**BNK Forge & AI Governance Integration (`docs/FORGE_INTEGRATION.md`)**](docs/FORGE_INTEGRATION.md) — Visual walkthrough of BNK Forge cluster registration, policy building, AI token governance, and Smart LLM Routing across AWS, Azure, and GCP.
+- [**BNK Forge & F5 BNK AI Service Plane Integration (`docs/FORGE_INTEGRATION.md`)**](docs/FORGE_INTEGRATION.md) — Visual walkthrough of [BNK Forge](https://github.com/JLCode-tech/bnk-forge) cluster registration, policy building, AI token governance, and Smart LLM Routing across AWS, Azure, and GCP.
 - [**Multi-Cloud Quickstart Guide (`docs/MULTI_CLOUD_QUICKSTART.md`)**](docs/MULTI_CLOUD_QUICKSTART.md) — Step-by-step guide to deploying, validating, and tearing down BNK on AWS EKS, Azure AKS, and GCP GKE.
+- [**F5 BIG-IP Next for Kubernetes CloudDocs**](https://clouddocs.f5.com/bigip-next-for-kubernetes/latest/overview.html) — Official F5 product documentation, architecture guides, and prerequisite setup.
 
 ---
 

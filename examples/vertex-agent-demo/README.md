@@ -9,7 +9,7 @@ As enterprises deploy autonomous AI agents into production on Google Cloud, secu
 **F5 BIG-IP Next for Kubernetes (BNK)** operates directly at this boundary on GKE:
 - **High-Performance Multi-Networking**: Leverages GKE host-device secondary VPC interfaces and TMM data planes for deterministic L4-L7 traffic handling.
 - **Action Path Governance**: Enforces per-agent rate limits, token authentication, and policy-driven routing for tool execution.
-- **Enterprise Observability**: Streams comprehensive audit metrics, latency telemetry, and logs to BNK Forge and OpenTelemetry/Prometheus collectors.
+- **Enterprise Observability**: Streams comprehensive audit metrics, latency telemetry, and logs to [BNK Forge](https://github.com/JLCode-tech/bnk-forge) and OpenTelemetry/Prometheus collectors. For full platform documentation, see the [F5 BIG-IP Next for Kubernetes CloudDocs](https://clouddocs.f5.com/bigip-next-for-kubernetes/latest/overview.html).
 
 ---
 
@@ -54,13 +54,13 @@ flowchart TD
 examples/vertex-agent-demo/
 ├── README.md                 # GKE & Vertex AI governance guide (BNK 2.4.1, K8s 1.35)
 ├── cluster.yaml              # GKE cluster definition (K8s 1.35, BNK 2.4.1, FLO v2.30.1-0.0.8, aiGateway)
-├── k8s/bnk-llm-gateway.yaml  # Authentic BNK 2.4.1 7-step inference.k8s.f5.com/v1alpha1 + AppPolicy + DNS/Route
+├── k8s/bnk-llm-gateway.yaml  # F5 BNK AI Service Plane (2.4.1) routing, DNS & governance manifests
 ├── gateway-deployment.yaml   # BNK Gateway & HTTPRoutes
-├── mcp-persistence.yaml      # F5BigPersistenceProfile (MODEL_CONTEXT_PROTOCOL)
-├── mcp-security-policy.yaml  # F5BigCneIrule, NetPolicy, F5BigFwPolicy, SecPolicy
+├── mcp-persistence.yaml      # MCP session persistence profile
+├── mcp-security-policy.yaml  # Rate limiting, firewall & security policies
 ├── mcp-observability.yaml    # Loki & Fluent Bit observability stack
 ├── mcp-vertex-token-shipper.yaml # Vertex AI Gemini 2.5 Pro token shipper
-├── traffic-generator-deployment.yaml # Live dual-leg traffic generator (BNK 2.4.1 AI Gateway + MCP)
+├── traffic-generator-deployment.yaml # Live dual-leg traffic generator (F5 BNK AI Service Plane + MCP)
 ├── mcp-tool/
 │   ├── mcp-server.py         # FastMCP Python service (forecast & get_account_balance)
 │   ├── deployment.yaml       # K8s Deployment, Service, and Secret
@@ -70,9 +70,9 @@ examples/vertex-agent-demo/
 │   ├── requirements.txt      # Python dependencies
 │   └── README.md             # Agent configuration guide
 └── scripts/
-    ├── setup-llm-gateway.sh  # 7-step BNK 2.4.1 AI Gateway + CNE restart + f5vk_ governance bootstrap
+    ├── setup-llm-gateway.sh  # F5 BNK AI Service Plane (2.4.1) + f5vk_ governance bootstrap
     ├── demo.sh               # Automated deployment and verification script
-    └── traffic-gen.sh        # Live AI Gateway + MCP traffic generator
+    └── traffic-gen.sh        # Live F5 BNK AI Service Plane + MCP traffic generator
 ```
 
 ---
@@ -88,7 +88,7 @@ gkebnkctl validate examples/vertex-agent-demo/cluster.yaml
 gkebnkctl up -f examples/vertex-agent-demo/cluster.yaml
 ```
 
-### 2. Deploy MCP Tool, BNK 2.4.1 AI Gateway, and Governance Policies
+### 2. Deploy MCP Tool, F5 BNK AI Service Plane, and Governance Policies
 ```bash
 kubectl apply -k examples/vertex-agent-demo/mcp-tool
 kubectl apply -f examples/vertex-agent-demo/gateway-deployment.yaml
@@ -97,12 +97,12 @@ kubectl apply -f examples/vertex-agent-demo/mcp-security-policy.yaml
 ./examples/vertex-agent-demo/scripts/setup-llm-gateway.sh
 ```
 
-### 3. Connect Cluster to BNK Forge & Inspect Multi-Cluster AI Gateway Fabric
+### 3. Connect Cluster to [BNK Forge](https://github.com/JLCode-tech/bnk-forge) & Inspect F5 BNK AI Service Plane Fabric
 ```bash
-# Scan BNK 2.4.1 AI Gateway dependency chain and MCP posture
+# Scan BNK 2.4.1 F5 BNK AI Service Plane readiness and MCP posture
 gkebnkctl forge scan -f examples/vertex-agent-demo/cluster.yaml --register-targets
 
-# Query Forge Multi-Cluster AI Gateway & Dependency Fabric
+# Query Forge F5 BNK AI Service Plane & Dependency Fabric
 gkebnkctl forge governance overview -f examples/vertex-agent-demo/cluster.yaml --forge-url http://localhost:8000
 gkebnkctl forge governance test-request -f examples/vertex-agent-demo/cluster.yaml --forge-url http://localhost:8000
 ```

@@ -18,14 +18,14 @@ This compiles four binaries in `./bin/`:
 
 ---
 
-## Step 2: Stage Your F5 BNK Credentials Locally
+## Step 2: Configure F5 BIG-IP Next for Kubernetes Prerequisites
 
-Every BNK deployment requires two operator-supplied files (which are strictly gitignored across the repository so they can never be committed):
+Every BNK deployment requires operator-supplied licensing and F5 container registry access (strictly gitignored across the repository so credentials can never be committed):
 
 1. **F5 Subscription JWT (`license.jwt`)** — Grants BNK instance licensing.
-2. **F5 Artifact Registry Pull Secret (`cne_pull_64.json` or `dockerconfig.json`)** — Grants container image and Helm chart pull access from `repo.f5.com`.
+2. **F5 Artifact Registry Access** — Grants container image and Helm chart pull access from `repo.f5.com`.
 
-Place or symlink them into the example directory you plan to run (or at the repository root as referenced by `cluster.yaml`):
+Follow the official [F5 BIG-IP Next for Kubernetes CloudDocs](https://clouddocs.f5.com/bigip-next-for-kubernetes/latest/overview.html) to obtain your F5 subscription JWT and configure registry pull credentials. Place or symlink them into the example directory you plan to run (or at the repository root as referenced by `cluster.yaml`):
 
 ```bash
 # Verify your local prerequisites and JWT expiration before provisioning
@@ -48,7 +48,7 @@ aws sts get-caller-identity
 ./bin/bnkctl up -c examples/agentcore-demo/cluster.yaml --dry-run
 ```
 
-### 3. Provision Underlay & Deploy BNK 2.4.1 + AI Gateway
+### 3. Provision Underlay & Deploy BNK 2.4.1 + F5 BNK AI Service Plane
 ```bash
 ./bin/bnkctl up -c examples/agentcore-demo/cluster.yaml
 ```
@@ -56,8 +56,8 @@ What `bnkctl up` provisions on AWS:
 - VPC (`10.0.0.0/16`) with public, private, and dedicated `external` (`10.0.10.0/24`) and `internal` (`10.0.20.0/24`) data-plane subnets
 - Managed EKS 1.35 cluster and worker nodegroup (`m6i.4xlarge`)
 - Secondary ENIs attached to worker nodes (`host-device` mode) with source/dest check disabled
-- Multus CNI, `external-nad` / `internal-nad` NetworkAttachmentDefinitions, FLO, CNE controller, TMM DaemonSet, and BNK 2.4.1 AI Gateway
-- Optional EC2 jumphost in the management subnet and automatic registration with BNK Forge
+- Full F5 BIG-IP Next for Kubernetes 2.4.1 data plane and **F5 BNK AI Service Plane** (see [F5 CloudDocs](https://clouddocs.f5.com/bigip-next-for-kubernetes/latest/overview.html))
+- Optional EC2 jumphost in the management subnet and automatic registration with [BNK Forge](https://github.com/JLCode-tech/bnk-forge)
 
 ### 4. Verify & Tear Down
 ```bash
@@ -84,15 +84,15 @@ az account show
 ./bin/bnkctl up -c examples/agentfoundry-demo/cluster.yaml --dry-run
 ```
 
-### 3. Provision Underlay & Deploy BNK 2.4.1 + AI Gateway
+### 3. Provision Underlay & Deploy BNK 2.4.1 + F5 BNK AI Service Plane
 ```bash
 ./bin/bnkctl up -c examples/agentfoundry-demo/cluster.yaml
 ```
 What `bnkctl up` provisions on Azure:
 - Resource Group and VNet (`10.0.0.0/16`) with `system`, `public`, `external`, and `internal` subnets
 - Managed AKS cluster with separate `system` and Accelerated Networking `tmm` node pools (`dual-interface` pattern)
-- Dynamic secondary NIC attachment on TMM worker VMs and IP forwarding enablement
-- FLO, CNE controller, TMM DaemonSet, VXLAN egress gateway, BNK 2.4.1 AI Gateway, and BNK Forge registration
+- Dynamic secondary NIC attachment on worker VMs and IP forwarding enablement
+- Full F5 BIG-IP Next for Kubernetes 2.4.1 data plane, VXLAN egress, **F5 BNK AI Service Plane** (see [F5 CloudDocs](https://clouddocs.f5.com/bigip-next-for-kubernetes/latest/overview.html)), and [BNK Forge](https://github.com/JLCode-tech/bnk-forge) registration
 
 ### 4. Verify & Tear Down
 ```bash
@@ -118,14 +118,14 @@ export GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
 ./bin/bnkctl up -c examples/vertex-agent-demo/cluster.yaml --dry-run
 ```
 
-### 3. Provision Underlay & Deploy BNK 2.4.1 + AI Gateway
+### 3. Provision Underlay & Deploy BNK 2.4.1 + F5 BNK AI Service Plane
 ```bash
 ./bin/bnkctl up -c examples/vertex-agent-demo/cluster.yaml
 ```
 What `bnkctl up` provisions on GCP:
 - Three VPCs (`main`, `external`, `internal`) with secondary pod/service IP ranges, Cloud Router + Cloud NAT, and Jumbo Frame MTU (`8896`) on the data-plane VPCs
 - GKE cluster (`1.35`) with multi-network support enabled, `tmm-pool` attached to the `external` and `internal` VPCs (`virtio` driver), and `agent-pool`
-- FLO, CNE controller, TMM DaemonSet, VXLAN egress, BNK 2.4.1 AI Gateway routing to Google Vertex AI (Gemini 2.5 Pro/Flash), and BNK Forge registration
+- Full F5 BIG-IP Next for Kubernetes 2.4.1 data plane, VXLAN egress, **F5 BNK AI Service Plane** routing to Google Vertex AI (Gemini 2.5 Pro/Flash) (see [F5 CloudDocs](https://clouddocs.f5.com/bigip-next-for-kubernetes/latest/overview.html)), and [BNK Forge](https://github.com/JLCode-tech/bnk-forge) registration
 
 ### 4. Verify & Tear Down
 ```bash
