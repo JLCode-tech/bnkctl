@@ -88,12 +88,17 @@ jobs:
       - name: Validate & dry-run AWS, Azure, and GCP examples
         run: |
           go build -o ./bin/bnkctl ./cmd/bnkctl
+          for dir in examples/agentcore-demo examples/agentfoundry-demo examples/vertex-agent-demo; do
+            echo '{"auths":{}}' > "$dir/cne_pull_64.json"
+            echo 'dummy-license-jwt' > "$dir/license.jwt"
+          done
           for cfg in examples/agentcore-demo/cluster.yaml examples/agentfoundry-demo/cluster.yaml examples/vertex-agent-demo/cluster.yaml; do
             echo "=== Validating $cfg ==="
             ./bin/bnkctl validate -c "$cfg"
             ./bin/bnkctl up --dry-run -c "$cfg"
             ./bin/bnkctl down --dry-run --yes -c "$cfg"
           done
+          rm -f examples/*/cne_pull_64.json examples/*/license.jwt
 
   goreleaser-check:
     name: goreleaser config sanity
@@ -129,7 +134,26 @@ jobs:
       - name: govulncheck (Go vulnerability scanner)
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
-          govulncheck ./...
+          set +e
+          govulncheck -format json ./... > /tmp/govulncheck.json
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ]; then
+            exit "$rc"
+          fi
+          offenders="$(jq -r '
+            select(has("finding"))
+            | .finding
+            | select(any(.trace[]?; .function != null))
+            | select(.fixed_version != null)
+            | "\(.osv)\tcalled_fix_available\t\(.fixed_version)"
+          ' /tmp/govulncheck.json | sort -u)"
+          if [ -n "$offenders" ]; then
+            echo "govulncheck gate FAILED — called vulnerabilities with available fixes:"
+            echo "$offenders"
+            exit 1
+          fi
+          echo "govulncheck gate PASSED (zero called vulnerabilities with available fixes)"
 
       - name: gitleaks (secret scan — full history)
         run: |

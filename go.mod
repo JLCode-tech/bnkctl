@@ -2,6 +2,8 @@ module github.com/JLCode-tech/bnkctl
 
 go 1.26.0
 
+toolchain go1.26.10
+
 require (
 	cloud.google.com/go/compute v1.64.0
 	cloud.google.com/go/container v1.53.0
