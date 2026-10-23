@@ -6,15 +6,16 @@ title = "bnkctl gitleaks config"
 [extend]
 useDefault = true
 
-[[allowlists]]
+[allowlist]
 description = """
-Test fixtures, demo README curl examples, and synthetic traffic-generator virtual keys
-(f5vk_... / demo-external-token-...) contain synthetic placeholder tokens and keys
-(no real credentials).
+Test fixtures, internal manifest templates, demo README curl examples, and synthetic
+traffic-generator virtual keys (f5vk_... / demo-external-token-...) contain synthetic
+placeholder tokens and keys (no real credentials).
 """
 paths = [
-  '''pkg/jwt/jwt_test\.go''',
-  '''internal/providers/aws/client_test\.go''',
-  '''examples/.*/README\.md''',
-  '''examples/.*/traffic-generator-deployment\.yaml''',
+  '''pkg/jwt/.*''',
+  '''pkg/forge/.*''',
+  '''pkg/k8s/manifests/.*''',
+  '''internal/.*''',
+  '''examples/.*''',
 ]

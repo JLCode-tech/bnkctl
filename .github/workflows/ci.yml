@@ -88,10 +88,14 @@ jobs:
       - name: Validate & dry-run AWS, Azure, and GCP examples
         run: |
           go build -o ./bin/bnkctl ./cmd/bnkctl
+          DUMMY_JWT="$(printf '{"alg":"none"}' | base64 | tr -d '=\n').$(printf '{"sub":"ci","exp":4102444800}' | base64 | tr -d '=\n').c2ln"
           for dir in examples/agentcore-demo examples/agentfoundry-demo examples/vertex-agent-demo; do
+            mkdir -p "$dir/keys"
             echo '{"auths":{}}' > "$dir/cne_pull_64.json"
             echo '{"auths":{}}' > "$dir/dockerconfig.json"
-            echo 'dummy-license-jwt' > "$dir/license.jwt"
+            echo '{"auths":{}}' > "$dir/keys/f5-far-auth-key.tgz"
+            echo "$DUMMY_JWT" > "$dir/license.jwt"
+            echo "$DUMMY_JWT" > "$dir/keys/license.jwt"
           done
           for cfg in examples/agentcore-demo/cluster.yaml examples/agentfoundry-demo/cluster.yaml examples/vertex-agent-demo/cluster.yaml; do
             echo "=== Validating $cfg ==="
@@ -99,7 +103,7 @@ jobs:
             ./bin/bnkctl up --dry-run -c "$cfg"
             ./bin/bnkctl down --dry-run --yes -c "$cfg"
           done
-          rm -f examples/*/cne_pull_64.json examples/*/dockerconfig.json examples/*/license.jwt
+          rm -rf examples/*/cne_pull_64.json examples/*/dockerconfig.json examples/*/license.jwt examples/*/keys
 
   goreleaser-check:
     name: goreleaser config sanity
