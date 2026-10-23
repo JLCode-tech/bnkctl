@@ -1,5 +1,7 @@
 name: CI
 
+# Runs on every PR and on push to main/staging.
+
 on:
   pull_request:
     branches: [main, staging]
@@ -15,7 +17,7 @@ concurrency:
 
 jobs:
   test-and-build:
-    name: vet + test + build (all 4 CLIs)
+    name: vet + fmt + test + build (all 4 CLIs)
     strategy:
       fail-fast: false
       matrix:
@@ -37,6 +39,9 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: gofmt
+        run: gofmt -d -l . | tee /tmp/gofmt.diff && test ! -s /tmp/gofmt.diff
+
       - name: go test
         run: go test -race ./...
 
@@ -52,13 +57,79 @@ jobs:
           ./bin/azrbnkctl version
           ./bin/gkebnkctl version
 
-  security-audit:
-    name: gitleaks secret scan
+  build-windows:
+    name: windows build (amd64 + arm64)
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Cross-compile Windows binaries
+        run: |
+          mkdir -p bin
+          GOOS=windows GOARCH=amd64 go build -o bin/bnkctl-windows-amd64.exe ./cmd/bnkctl
+          GOOS=windows GOARCH=arm64 go build -o bin/bnkctl-windows-arm64.exe ./cmd/bnkctl
+
+  up-dryrun:
+    name: multi-cloud validate + up/down --dry-run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Validate & dry-run AWS, Azure, and GCP examples
+        run: |
+          go build -o ./bin/bnkctl ./cmd/bnkctl
+          for cfg in examples/agentcore-demo/cluster.yaml examples/agentfoundry-demo/cluster.yaml examples/vertex-agent-demo/cluster.yaml; do
+            echo "=== Validating $cfg ==="
+            ./bin/bnkctl validate -c "$cfg"
+            ./bin/bnkctl up --dry-run -c "$cfg"
+            ./bin/bnkctl down --dry-run --yes -c "$cfg"
+          done
+
+  goreleaser-check:
+    name: goreleaser config sanity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
+
+  security-audit:
+    name: security audit (gosec + govulncheck + gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: govulncheck (Go vulnerability scanner)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          govulncheck ./...
 
       - name: gitleaks (secret scan — full history)
         run: |
