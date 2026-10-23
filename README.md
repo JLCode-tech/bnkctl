@@ -24,16 +24,16 @@ Deploying a **BIG-IP Next for Kubernetes (BNK)** and **F5 BNK AI Service Plane**
 
 ---
 
-## Supported Clouds & Binaries
+## Supported Clouds & Binaries (The `bnkctl` Family)
 
-All four CLI binaries compile from this single repository and share `pkg/bnkengine`, `pkg/forge`, `pkg/intent`, `pkg/release`, and `pkg/scenarios`:
+**`bnkctl` is the preferred unified multi-cloud CLI** for deploying and operating F5 BIG-IP Next for Kubernetes across AWS, Azure, and GCP from a single codebase. For single-cloud workflows or backward compatibility, the standalone cloud-pinned CLIs share the same engine and declarative `cluster.yaml` model:
 
-| Binary | Target Cloud | Default Underlay & Dataplane Architecture |
-| :--- | :--- | :--- |
-| **`bnkctl`** | **AWS, Azure, GCP** | Auto-detects cloud provider from `cluster.yaml` (`apiVersion` or `cloud.provider`) or `--cloud aws\|azure\|gcp`. |
-| **`awsbnkctl`** | **AWS EKS** | VPC + Public/Private/DataPath Subnets (including AWS Local Zones), Multus + `host-device` / SR-IOV secondary ENIs, AWS Route Server BGP peering. |
-| **`azrbnkctl`** | **Azure AKS** | VNet + System & TMM Node Pools, Accelerated Networking (`dual-interface`), dynamic secondary NIC attachment, VXLAN egress / L4 load balancing. |
-| **`gkebnkctl`** | **GCP GKE** | Multi-VPC (`main`, `external`, `internal`) with Jumbo Frames (MTU 8896), GKE multi-network pod attachments (`virtio`), Cloud NAT & IAP jumphost. |
+| CLI & Repository | Status | Target Cloud | Default Underlay & Dataplane Architecture |
+| :--- | :--- | :--- | :--- |
+| [**`bnkctl`**](https://github.com/JLCode-tech/bnkctl) | **Preferred (Unified)** | **AWS, Azure, GCP** | Auto-detects cloud provider from `cluster.yaml` (`apiVersion` or `cloud.provider`) or `--cloud aws\|azure\|gcp`. |
+| [**`awsbnkctl`**](https://github.com/JLCode-tech/awsbnkctl) | Single-Cloud (AWS) | **AWS EKS** | VPC + Public/Private/DataPath Subnets (including AWS Local Zones), Multus + `host-device` / SR-IOV secondary ENIs, AWS Route Server BGP peering. |
+| [**`azrbnkctl`**](https://github.com/JLCode-tech/azrbnkctl) | Single-Cloud (Azure) | **Azure AKS** | VNet + System & TMM Node Pools, Accelerated Networking (`dual-interface`), dynamic secondary NIC attachment, VXLAN egress / L4 load balancing. |
+| [**`gkebnkctl`**](https://github.com/JLCode-tech/gkebnkctl) | Single-Cloud (GCP) | **GCP GKE** | Multi-VPC (`main`, `external`, `internal`) with Jumbo Frames (MTU 8896), GKE multi-network pod attachments (`virtio`), Cloud NAT & IAP jumphost. |
 
 Build all four binaries with a single command:
 
