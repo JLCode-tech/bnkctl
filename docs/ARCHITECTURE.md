@@ -18,7 +18,7 @@ flowchart TD
     subgraph Core["Shared Core Packages (pkg/ & internal/cli)"]
         CLI["internal/cli\nCobra Commands & Flags"]
         INT["pkg/intent\nUnified cluster.yaml Parser & Validator"]
-        REL["pkg/release\nBNK 2.3.x / 2.4.0 / 2.4.1 / 2.5.0 Catalog"]
+        REL["pkg/release\nBNK 2.3.x / 2.4.0 / 2.4.1 / Future Release Catalog"]
         ENG["pkg/bnkengine\nShared BNK Overlay & Quirk Reconciler"]
         FRG["pkg/forge\nBNK Forge REST/MCP & AI Governance Client"]
         SCN["pkg/scenarios\n15 Built-in L4/L7 & GenAI Scenarios"]
@@ -65,7 +65,7 @@ bnkctl/
 │   ├── k8s/             # Dynamic client-go apply, wait, finalizer stripping, and template variable rendering
 │   ├── netcalc/         # CIDR / SelfIP / VIP deterministic network calculator
 │   ├── provider/        # Cloud-agnostic Provider interface and UnderlayContext contract
-│   ├── release/         # Version-aware BNK release matrix (2.3.x, 2.4.0, 2.4.1, 2.5.0) and quirk registry
+│   ├── release/         # Version-aware BNK release matrix (2.3.x, 2.4.0, 2.4.1, future release) and quirk registry
 │   ├── scenarios/       # 15 end-to-end validation scenarios (HTTP, gRPC, TCP/UDP L4, Egress SNAT, F5 BNK AI Service Plane)
 │   └── state/           # Per-cluster state.env persistence (.bnkctl/, .awsbnkctl/, .azrbnkctl/, .gkebnkctl/)
 ├── examples/            # Ready-to-run multi-cloud blueprints (AWS AgentCore, Azure Foundry, GCP Vertex, Local Zones)
@@ -96,7 +96,7 @@ Once `ProvisionUnderlay` or `DiscoverUnderlay` finishes, it returns a normalized
 - External and Internal `SelfIPs`, prefixes, VLANs/MTUs, and default `VIP` addresses
 - Cloud-specific lifecycle hooks (`PreOverlayHooks`, `PostOverlayHooks`, `DiscoverDataplaneResources`)
 
-`pkg/bnkengine.Engine` consumes only `UnderlayContext`, `intent.Cluster`, and `release.Profile`. As a result, **every BNK release train (`2.3.x`, `2.4.0`, `2.4.1`, `2.5.0`), self-healing quirk, and validation scenario works identically across AWS, Azure, and GCP**.
+`pkg/bnkengine.Engine` consumes only `UnderlayContext`, `intent.Cluster`, and `release.Profile`. As a result, **every BNK release train (`2.3.x`, `2.4.0`, `2.4.1`, and future releases), self-healing quirk, and validation scenario works identically across AWS, Azure, and GCP**.
 
 ---
 
@@ -107,7 +107,7 @@ BNK releases span two major architectural trains:
 | Release Train | Versions | Capability Overview |
 | :--- | :--- | :--- |
 | **`legacy-spk` (2.3.x)** | `2.3.2-3.2598.3-0.0.464` | Cloud-native L4/L7 ingress, egress, and carrier-grade network traffic management for Kubernetes clusters. |
-| **`gateway-infra` (2.4.x / 2.5.0)** | `2.4.0`, `2.4.1`, `2.5.0` | Next-generation Kubernetes Gateway API architecture with native **F5 BNK AI Service Plane** traffic governance and lifecycle automation. |
+| **`gateway-infra` (2.4.x / future)** | `2.4.0`, `2.4.1`, `future` | Next-generation Kubernetes Gateway API architecture with native **F5 BNK AI Service Plane** traffic governance and lifecycle automation. |
 
 For full release notes, architectural overviews, and feature specifications, see the [F5 BIG-IP Next for Kubernetes CloudDocs](https://clouddocs.f5.com/bigip-next-for-kubernetes/latest/overview.html).
 
@@ -115,4 +115,4 @@ For full release notes, architectural overviews, and feature specifications, see
 - **Certificate & Webhook Readiness**: Ensures TLS certificates and admission endpoints are ready before custom resources are applied.
 - **Data-Plane Resource & Hugepages Tuning**: Aligns data-plane resource requests and hugepages with cloud VM shapes.
 - **F5 BNK AI Service Plane Readiness**: Reconciles BNK 2.4.1+ AI traffic routing, governance, and token-rate enforcement prerequisites.
-- **Cross-Train Migration (`bnkctl migrate`)**: Safely transitions live clusters from `2.3.x` (`legacy-spk`) to `2.4.x/2.5.0` (`gateway-infra`) without recreating the cloud underlay.
+- **Cross-Train Migration (`bnkctl migrate`)**: Safely transitions live clusters from `2.3.x` (`legacy-spk`) to `2.4.x/future` (`gateway-infra`) without recreating the cloud underlay.

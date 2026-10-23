@@ -140,8 +140,8 @@ What `bnkctl up` provisions on GCP:
 `bnkctl` supports both in-train upgrades and cross-train architectural migrations on any running cluster:
 
 ```bash
-# Upgrade within the 2.4.x / 2.5.0 gateway-infra train
-./bin/bnkctl upgrade --to-version 2.5.0 -c cluster.yaml
+# Upgrade within the 2.4.x / future gateway-infra train
+./bin/bnkctl upgrade --to-version 2.4.1 -c cluster.yaml
 
 # Migrate a 2.3.x legacy-spk cluster to 2.4.1 gateway-infra
 ./bin/bnkctl migrate --to-version 2.4.1 -c cluster.yaml
