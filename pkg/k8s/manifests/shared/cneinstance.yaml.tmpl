@@ -126,6 +126,8 @@ spec:
           value: "{{ .PalCpuSet }}"
         - name: TMM_MAPRES_ADDL_VETHS_ON_DP
           value: "TRUE"
+        - name: TMM_SOCAT_DISABLE
+          value: "1"
 {{- if .ServiceCIDR }}
         # TMM_K8S_ROUTES (the f5-tmm chart's add_k8s_routes): the Kubernetes
         # networks TMM keeps reachable over eth0 once the Infra CR gives it a
@@ -152,10 +154,10 @@ spec:
         # host-device hardcodes the PCIDEVICE entries below; sriov lets the
         # device plugin inject them (don't set the same var twice).
         - name: ROBIN_VFIO_RESOURCE_1
-          value: "{{ .ExternalIFName }}"
+          value: "{{ .ExternalIFUpper }}"
 {{- if .HasInternal }}
         - name: ROBIN_VFIO_RESOURCE_2
-          value: "{{ .InternalIFName }}"
+          value: "{{ .InternalIFUpper }}"
 {{- end }}
 {{- if not .Sriov }}
         - name: PCIDEVICE_INTEL_COM_{{ .ExternalIFUpper }}

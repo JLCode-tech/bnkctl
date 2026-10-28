@@ -22,7 +22,7 @@ const (
 var AddonPollInterval = 5 * time.Second
 
 // AddonPollTimeout is the maximum time to wait for an EKS addon to reach ACTIVE.
-var AddonPollTimeout = 5 * time.Minute
+var AddonPollTimeout = 10 * time.Minute
 
 func waitForAddonActive(ctx context.Context, c *Clients, clusterName, addonName string) error {
 	deadline := time.Now().Add(AddonPollTimeout)

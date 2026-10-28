@@ -506,6 +506,9 @@ func TestRenderCNEInstance_HappyPath(t *testing.T) {
 		`value: "true"`,  // CLOUD_ENV
 		"value: \"aws\"", // CLOUD_PROVIDER
 		"value: \"AWS\"", // PLATFORM_TYPE
+		"- name: TMM_SOCAT_DISABLE\n          value: \"1\"",
+		"- name: ROBIN_VFIO_RESOURCE_1\n          value: \"ENS8\"",
+		"- name: ROBIN_VFIO_RESOURCE_2\n          value: \"ENS7\"",
 	}
 	for _, want := range constChecks {
 		if !strings.Contains(rendered, want) {

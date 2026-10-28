@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/JLCode-tech/bnkctl/internal/providers/aws/tags"
 	"github.com/JLCode-tech/bnkctl/pkg/bnkconst"
 	"github.com/JLCode-tech/bnkctl/pkg/intent"
 	"github.com/JLCode-tech/bnkctl/pkg/state"
@@ -137,7 +138,7 @@ func reconcileControllerIRSA(ctx context.Context, k8sClient kubernetes.Interface
 }
 
 // hydrateMissingStateFromAWS discovers AWS underlay resource IDs by cluster name/tags
-// when state.env has been cleared (e.g. after a previous partial or wiped down run).
+// when state.env has been partially populated or cleared (e.g. after a previous partial or wiped down run).
 func hydrateMissingStateFromAWS(ctx context.Context, cl *intent.Cluster, st *state.State, c *Clients) {
 	if cl == nil || cl.Metadata.Name == "" || st == nil || c == nil {
 		return
@@ -175,26 +176,121 @@ func hydrateMissingStateFromAWS(ctx context.Context, cl *intent.Cluster, st *sta
 	}
 	vpcID := st.Get("VPC_ID")
 	if vpcID == "" {
-		if vpcOut, err := c.PhaseEC2.DescribeVpcs(ctx, &ec2.DescribeVpcsInput{
-			Filters: []ec2types.Filter{
-				{Name: aws.String("tag:Name"), Values: []string{clusterName + "-vpc"}},
-			},
-		}); err == nil && vpcOut != nil && len(vpcOut.Vpcs) > 0 && vpcOut.Vpcs[0].VpcId != nil {
-			vpcID = *vpcOut.Vpcs[0].VpcId
+		if taggedVPCs, err := findVPCsByTag(ctx, c.PhaseEC2, clusterName); err == nil && len(taggedVPCs) > 0 {
+			vpcID = taggedVPCs[0]
 			st.Set("VPC_ID", vpcID)
 		}
 	}
-	if vpcID == "" {
-		return
-	}
 	if st.Get("IGW_ID") == "" {
-		if igwOut, err := c.PhaseEC2.DescribeInternetGateways(ctx, &ec2.DescribeInternetGatewaysInput{
-			Filters: []ec2types.Filter{
-				{Name: aws.String("attachment.vpc-id"), Values: []string{vpcID}},
-			},
-		}); err == nil && igwOut != nil && len(igwOut.InternetGateways) > 0 && igwOut.InternetGateways[0].InternetGatewayId != nil {
-			st.Set("IGW_ID", *igwOut.InternetGateways[0].InternetGatewayId)
+		if vpcID != "" {
+			if igwOut, err := c.PhaseEC2.DescribeInternetGateways(ctx, &ec2.DescribeInternetGatewaysInput{
+				Filters: []ec2types.Filter{
+					{Name: aws.String("attachment.vpc-id"), Values: []string{vpcID}},
+				},
+			}); err == nil && igwOut != nil && len(igwOut.InternetGateways) > 0 && igwOut.InternetGateways[0].InternetGatewayId != nil {
+				st.Set("IGW_ID", *igwOut.InternetGateways[0].InternetGatewayId)
+			}
 		}
+		if st.Get("IGW_ID") == "" {
+			if igwOut, err := c.PhaseEC2.DescribeInternetGateways(ctx, &ec2.DescribeInternetGatewaysInput{
+				Filters: []ec2types.Filter{tags.ClusterFilter(clusterName)},
+			}); err == nil && igwOut != nil && len(igwOut.InternetGateways) > 0 && igwOut.InternetGateways[0].InternetGatewayId != nil {
+				st.Set("IGW_ID", *igwOut.InternetGateways[0].InternetGatewayId)
+			}
+		}
+	}
+
+	if st.Get("PUBLIC_SUBNETS") == "" || st.Get("PRIVATE_SUBNETS") == "" ||
+		st.Get("PUBLIC_SUBNET_0") == "" || st.Get("PRIVATE_SUBNET_0") == "" ||
+		st.Get("BNK_EXT_SUBNET") == "" || st.Get("BNK_INT_SUBNET") == "" ||
+		st.Get("SUBNET_EXT_ID") == "" || st.Get("SUBNET_INT_ID") == "" {
+		var subFilters []ec2types.Filter
+		if vpcID != "" {
+			subFilters = []ec2types.Filter{{Name: aws.String("vpc-id"), Values: []string{vpcID}}}
+		} else {
+			subFilters = []ec2types.Filter{tags.ClusterFilter(clusterName)}
+		}
+		if subOut, err := c.PhaseEC2.DescribeSubnets(ctx, &ec2.DescribeSubnetsInput{
+			Filters: subFilters,
+		}); err == nil && subOut != nil && len(subOut.Subnets) > 0 {
+			var pubIDs, privIDs []string
+			for _, s := range subOut.Subnets {
+				if s.SubnetId == nil || *s.SubnetId == "" {
+					continue
+				}
+				id := *s.SubnetId
+				var role, comp, datapath, name string
+				var elbPub, elbPriv bool
+				for _, t := range s.Tags {
+					k := aws.ToString(t.Key)
+					v := strings.ToLower(aws.ToString(t.Value))
+					switch k {
+					case tags.KeyComponent:
+						comp = v
+					case "bnk.f5.com/datapath":
+						datapath = v
+					case "bnk:subnet-role", "f5-bnk:subnet-role":
+						role = v
+					case "Name":
+						name = v
+					case "kubernetes.io/role/elb":
+						elbPub = v == "1"
+					case "kubernetes.io/role/internal-elb":
+						elbPriv = v == "1"
+					}
+				}
+				switch {
+				case comp == tags.CompSubnetBNKExt || datapath == "external" || role == "external" || strings.Contains(name, "bnk-ext"):
+					if st.Get("BNK_EXT_SUBNET") == "" {
+						st.Set("BNK_EXT_SUBNET", id)
+					}
+					if st.Get("SUBNET_EXT_ID") == "" {
+						st.Set("SUBNET_EXT_ID", id)
+					}
+				case comp == tags.CompSubnetBNKInt || datapath == "internal" || role == "internal" || strings.Contains(name, "bnk-int"):
+					if st.Get("BNK_INT_SUBNET") == "" {
+						st.Set("BNK_INT_SUBNET", id)
+					}
+					if st.Get("SUBNET_INT_ID") == "" {
+						st.Set("SUBNET_INT_ID", id)
+					}
+				case comp == tags.CompSubnetPublic || role == "public" || elbPub || strings.Contains(name, "public"):
+					pubIDs = append(pubIDs, id)
+				case comp == tags.CompSubnetPrivate || role == "private" || elbPriv || strings.Contains(name, "private"):
+					privIDs = append(privIDs, id)
+				}
+			}
+			if len(pubIDs) > 0 {
+				if st.Get("PUBLIC_SUBNETS") == "" {
+					st.Set("PUBLIC_SUBNETS", strings.Join(pubIDs, ","))
+				}
+				if st.Get("MGMT_SUBNET") == "" {
+					st.Set("MGMT_SUBNET", pubIDs[0])
+				}
+				for i, id := range pubIDs {
+					k := subnetStateKey("PUBLIC_SUBNET", i)
+					if st.Get(k) == "" {
+						st.Set(k, id)
+					}
+				}
+			}
+			if len(privIDs) > 0 {
+				if st.Get("PRIVATE_SUBNETS") == "" {
+					st.Set("PRIVATE_SUBNETS", strings.Join(privIDs, ","))
+				}
+				for i, id := range privIDs {
+					k := subnetStateKey("PRIVATE_SUBNET", i)
+					if st.Get(k) == "" {
+						st.Set(k, id)
+					}
+				}
+			}
+		}
+	}
+
+	if vpcID == "" {
+		_ = st.Save()
+		return
 	}
 	if st.Get("NAT_GW_ID") == "" {
 		if natOut, err := c.PhaseEC2.DescribeNatGateways(ctx, &ec2.DescribeNatGatewaysInput{
@@ -205,8 +301,14 @@ func hydrateMissingStateFromAWS(ctx context.Context, cl *intent.Cluster, st *sta
 			for _, ng := range natOut.NatGateways {
 				if ng.NatGatewayId != nil && ng.State != ec2types.NatGatewayStateDeleted && ng.State != ec2types.NatGatewayStateDeleting {
 					st.Set("NAT_GW_ID", *ng.NatGatewayId)
-					if st.Get("NAT_EIP_ALLOC_ID") == "" && len(ng.NatGatewayAddresses) > 0 && ng.NatGatewayAddresses[0].AllocationId != nil {
-						st.Set("NAT_EIP_ALLOC_ID", *ng.NatGatewayAddresses[0].AllocationId)
+					if len(ng.NatGatewayAddresses) > 0 && ng.NatGatewayAddresses[0].AllocationId != nil {
+						allocID := *ng.NatGatewayAddresses[0].AllocationId
+						if st.Get("NAT_EIP_ALLOC_ID") == "" {
+							st.Set("NAT_EIP_ALLOC_ID", allocID)
+						}
+						if st.Get("NAT_EIP_ALLOC") == "" {
+							st.Set("NAT_EIP_ALLOC", allocID)
+						}
 					}
 					break
 				}
@@ -258,6 +360,7 @@ func hydrateMissingStateFromAWS(ctx context.Context, cl *intent.Cluster, st *sta
 			}
 		}
 	}
+	_ = st.Save()
 }
 
 // teardownAWSUnderlay tears down AWS underlay state in reverse dependency order:
@@ -278,9 +381,8 @@ func (p *Provider) teardownAWSUnderlay(ctx context.Context, cl *intent.Cluster, 
 	}
 
 	if c != nil {
-		if st.Get("VPC_ID") == "" {
-			hydrateMissingStateFromAWS(ctx, cl, st, c)
-		}
+		hydrateMissingStateFromAWS(ctx, cl, st, c)
+
 		if c.K8s == nil {
 			if kc := st.KubeconfigPath(); kc != "" {
 				_ = c.AttachK8s(kc)

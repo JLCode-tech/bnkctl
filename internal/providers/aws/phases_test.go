@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/JLCode-tech/bnkctl/internal/providers/aws/tags"
 	"github.com/JLCode-tech/bnkctl/pkg/forge"
 	"github.com/JLCode-tech/bnkctl/pkg/intent"
 	"github.com/JLCode-tech/bnkctl/pkg/state"
@@ -289,6 +291,10 @@ func (f *fakePhaseEC2) DeleteInstanceConnectEndpoint(_ context.Context, _ *ec2.D
 func (f *fakePhaseEC2) TerminateInstances(_ context.Context, _ *ec2.TerminateInstancesInput, _ ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error) {
 	f.instanceTerminated = true
 	return &ec2.TerminateInstancesOutput{}, nil
+}
+
+func (f *fakePhaseEC2) ModifyInstanceMetadataOptions(_ context.Context, _ *ec2.ModifyInstanceMetadataOptionsInput, _ ...func(*ec2.Options)) (*ec2.ModifyInstanceMetadataOptionsOutput, error) {
+	return &ec2.ModifyInstanceMetadataOptionsOutput{}, nil
 }
 
 type fakePhaseIAM struct {
@@ -986,5 +992,651 @@ func TestAWSTeardownStatelessFallback(t *testing.T) {
 	}
 	if len(fakeIAM.deletedPolicyARNs) == 0 || fakeIAM.deletedPolicyARNs[0] != "arn:aws:iam::123456789012:policy/eks-stateless-cne-controller-policy" {
 		t.Fatalf("expected IRSA policy ARN to be reconstructed and deleted, got %v", fakeIAM.deletedPolicyARNs)
+	}
+}
+
+type fakeDepViolationErr struct{}
+
+func (fakeDepViolationErr) Error() string {
+	return "DependencyViolation: resource has mapped dependencies"
+}
+func (fakeDepViolationErr) ErrorCode() string             { return "DependencyViolation" }
+func (fakeDepViolationErr) ErrorMessage() string          { return "resource has mapped dependencies" }
+func (fakeDepViolationErr) ErrorFault() smithy.ErrorFault { return smithy.FaultClient }
+
+type hardeningFakeEC2 struct {
+	fakePhaseEC2
+	respectFilters          bool
+	vpcs                    []ec2types.Vpc
+	deletedVPCs             []string
+	deleteVPCFailuresLeft   int
+	eices                   []ec2types.Ec2InstanceConnectEndpoint
+	deletedEICEs            []string
+	enis                    []ec2types.NetworkInterface
+	deletedENIs             []string
+	sgs                     []ec2types.SecurityGroup
+	revokedIngressGroupIDs  []string
+	revokedEgressGroupIDs   []string
+	deletedSGs              []string
+	subnets                 []ec2types.Subnet
+	deletedSubnets          []string
+	deleteSubnetFailCounts  map[string]int
+	routeTables             []ec2types.RouteTable
+	disassociatedRTAssocIDs []string
+	deletedRouteTables      []string
+	igws                    []ec2types.InternetGateway
+	detachedIGWs            []string
+	deletedIGWs             []string
+	natGateways             []ec2types.NatGateway
+}
+
+func (f *hardeningFakeEC2) DescribeVpcs(_ context.Context, in *ec2.DescribeVpcsInput, _ ...func(*ec2.Options)) (*ec2.DescribeVpcsOutput, error) {
+	if in != nil && len(in.VpcIds) > 0 {
+		want := make(map[string]bool, len(in.VpcIds))
+		for _, id := range in.VpcIds {
+			want[id] = true
+		}
+		var matched []ec2types.Vpc
+		for _, v := range f.vpcs {
+			if want[aws.ToString(v.VpcId)] {
+				matched = append(matched, v)
+			}
+		}
+		return &ec2.DescribeVpcsOutput{Vpcs: matched}, nil
+	}
+	if f.respectFilters && in != nil && len(in.Filters) > 0 {
+		var matched []ec2types.Vpc
+		for _, v := range f.vpcs {
+			ok := true
+			for _, flt := range in.Filters {
+				name := aws.ToString(flt.Name)
+				if strings.HasPrefix(name, "tag:") {
+					tagKey := strings.TrimPrefix(name, "tag:")
+					foundTag := false
+					for _, t := range v.Tags {
+						if aws.ToString(t.Key) == tagKey {
+							for _, val := range flt.Values {
+								if aws.ToString(t.Value) == val {
+									foundTag = true
+									break
+								}
+							}
+						}
+					}
+					if !foundTag {
+						ok = false
+						break
+					}
+				}
+			}
+			if ok {
+				matched = append(matched, v)
+			}
+		}
+		return &ec2.DescribeVpcsOutput{Vpcs: matched}, nil
+	}
+	return &ec2.DescribeVpcsOutput{Vpcs: f.vpcs}, nil
+}
+
+func (f *hardeningFakeEC2) DeleteVpc(_ context.Context, in *ec2.DeleteVpcInput, _ ...func(*ec2.Options)) (*ec2.DeleteVpcOutput, error) {
+	if f.deleteVPCFailuresLeft > 0 {
+		f.deleteVPCFailuresLeft--
+		return nil, fakeDepViolationErr{}
+	}
+	f.deletedVPCs = append(f.deletedVPCs, aws.ToString(in.VpcId))
+	return &ec2.DeleteVpcOutput{}, nil
+}
+
+func (f *hardeningFakeEC2) DescribeInstanceConnectEndpoints(_ context.Context, _ *ec2.DescribeInstanceConnectEndpointsInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstanceConnectEndpointsOutput, error) {
+	return &ec2.DescribeInstanceConnectEndpointsOutput{InstanceConnectEndpoints: f.eices}, nil
+}
+
+func (f *hardeningFakeEC2) DeleteInstanceConnectEndpoint(_ context.Context, in *ec2.DeleteInstanceConnectEndpointInput, _ ...func(*ec2.Options)) (*ec2.DeleteInstanceConnectEndpointOutput, error) {
+	id := aws.ToString(in.InstanceConnectEndpointId)
+	f.deletedEICEs = append(f.deletedEICEs, id)
+	for i := range f.eices {
+		if aws.ToString(f.eices[i].InstanceConnectEndpointId) == id {
+			f.eices[i].State = ec2types.Ec2InstanceConnectEndpointStateDeleteComplete
+		}
+	}
+	return &ec2.DeleteInstanceConnectEndpointOutput{}, nil
+}
+
+func (f *hardeningFakeEC2) DescribeNetworkInterfaces(_ context.Context, _ *ec2.DescribeNetworkInterfacesInput, _ ...func(*ec2.Options)) (*ec2.DescribeNetworkInterfacesOutput, error) {
+	return &ec2.DescribeNetworkInterfacesOutput{NetworkInterfaces: f.enis}, nil
+}
+
+func (f *hardeningFakeEC2) DeleteNetworkInterface(_ context.Context, in *ec2.DeleteNetworkInterfaceInput, _ ...func(*ec2.Options)) (*ec2.DeleteNetworkInterfaceOutput, error) {
+	f.deletedENIs = append(f.deletedENIs, aws.ToString(in.NetworkInterfaceId))
+	return &ec2.DeleteNetworkInterfaceOutput{}, nil
+}
+
+func (f *hardeningFakeEC2) DescribeSecurityGroups(_ context.Context, in *ec2.DescribeSecurityGroupsInput, _ ...func(*ec2.Options)) (*ec2.DescribeSecurityGroupsOutput, error) {
+	if in != nil && len(in.GroupIds) > 0 {
+		want := make(map[string]bool, len(in.GroupIds))
+		for _, id := range in.GroupIds {
+			want[id] = true
+		}
+		var matched []ec2types.SecurityGroup
+		for _, sg := range f.sgs {
+			if want[aws.ToString(sg.GroupId)] {
+				matched = append(matched, sg)
+			}
+		}
+		return &ec2.DescribeSecurityGroupsOutput{SecurityGroups: matched}, nil
+	}
+	return &ec2.DescribeSecurityGroupsOutput{SecurityGroups: f.sgs}, nil
+}
+
+func (f *hardeningFakeEC2) RevokeSecurityGroupIngress(_ context.Context, in *ec2.RevokeSecurityGroupIngressInput, _ ...func(*ec2.Options)) (*ec2.RevokeSecurityGroupIngressOutput, error) {
+	f.revokedIngressGroupIDs = append(f.revokedIngressGroupIDs, aws.ToString(in.GroupId))
+	return &ec2.RevokeSecurityGroupIngressOutput{}, nil
+}
+
+func (f *hardeningFakeEC2) RevokeSecurityGroupEgress(_ context.Context, in *ec2.RevokeSecurityGroupEgressInput, _ ...func(*ec2.Options)) (*ec2.RevokeSecurityGroupEgressOutput, error) {
+	f.revokedEgressGroupIDs = append(f.revokedEgressGroupIDs, aws.ToString(in.GroupId))
+	return &ec2.RevokeSecurityGroupEgressOutput{}, nil
+}
+
+func (f *hardeningFakeEC2) DeleteSecurityGroup(_ context.Context, in *ec2.DeleteSecurityGroupInput, _ ...func(*ec2.Options)) (*ec2.DeleteSecurityGroupOutput, error) {
+	id := aws.ToString(in.GroupId)
+	f.deletedSGs = append(f.deletedSGs, id)
+	var kept []ec2types.SecurityGroup
+	for _, sg := range f.sgs {
+		if aws.ToString(sg.GroupId) != id {
+			kept = append(kept, sg)
+		}
+	}
+	f.sgs = kept
+	return &ec2.DeleteSecurityGroupOutput{}, nil
+}
+
+func (f *hardeningFakeEC2) DescribeSubnets(_ context.Context, _ *ec2.DescribeSubnetsInput, _ ...func(*ec2.Options)) (*ec2.DescribeSubnetsOutput, error) {
+	return &ec2.DescribeSubnetsOutput{Subnets: f.subnets}, nil
+}
+
+func (f *hardeningFakeEC2) DeleteSubnet(_ context.Context, in *ec2.DeleteSubnetInput, _ ...func(*ec2.Options)) (*ec2.DeleteSubnetOutput, error) {
+	id := aws.ToString(in.SubnetId)
+	if f.deleteSubnetFailCounts != nil && f.deleteSubnetFailCounts[id] > 0 {
+		f.deleteSubnetFailCounts[id]--
+		return nil, fakeDepViolationErr{}
+	}
+	f.deletedSubnets = append(f.deletedSubnets, id)
+	return &ec2.DeleteSubnetOutput{}, nil
+}
+
+func (f *hardeningFakeEC2) DescribeRouteTables(_ context.Context, _ *ec2.DescribeRouteTablesInput, _ ...func(*ec2.Options)) (*ec2.DescribeRouteTablesOutput, error) {
+	return &ec2.DescribeRouteTablesOutput{RouteTables: f.routeTables}, nil
+}
+
+func (f *hardeningFakeEC2) DisassociateRouteTable(_ context.Context, in *ec2.DisassociateRouteTableInput, _ ...func(*ec2.Options)) (*ec2.DisassociateRouteTableOutput, error) {
+	f.disassociatedRTAssocIDs = append(f.disassociatedRTAssocIDs, aws.ToString(in.AssociationId))
+	return &ec2.DisassociateRouteTableOutput{}, nil
+}
+
+func (f *hardeningFakeEC2) DeleteRouteTable(_ context.Context, in *ec2.DeleteRouteTableInput, _ ...func(*ec2.Options)) (*ec2.DeleteRouteTableOutput, error) {
+	f.deletedRouteTables = append(f.deletedRouteTables, aws.ToString(in.RouteTableId))
+	return &ec2.DeleteRouteTableOutput{}, nil
+}
+
+func (f *hardeningFakeEC2) DescribeInternetGateways(_ context.Context, _ *ec2.DescribeInternetGatewaysInput, _ ...func(*ec2.Options)) (*ec2.DescribeInternetGatewaysOutput, error) {
+	return &ec2.DescribeInternetGatewaysOutput{InternetGateways: f.igws}, nil
+}
+
+func (f *hardeningFakeEC2) DetachInternetGateway(_ context.Context, in *ec2.DetachInternetGatewayInput, _ ...func(*ec2.Options)) (*ec2.DetachInternetGatewayOutput, error) {
+	f.detachedIGWs = append(f.detachedIGWs, aws.ToString(in.InternetGatewayId))
+	return &ec2.DetachInternetGatewayOutput{}, nil
+}
+
+func (f *hardeningFakeEC2) DeleteInternetGateway(_ context.Context, in *ec2.DeleteInternetGatewayInput, _ ...func(*ec2.Options)) (*ec2.DeleteInternetGatewayOutput, error) {
+	f.deletedIGWs = append(f.deletedIGWs, aws.ToString(in.InternetGatewayId))
+	return &ec2.DeleteInternetGatewayOutput{}, nil
+}
+
+func (f *hardeningFakeEC2) DescribeNatGateways(_ context.Context, _ *ec2.DescribeNatGatewaysInput, _ ...func(*ec2.Options)) (*ec2.DescribeNatGatewaysOutput, error) {
+	return &ec2.DescribeNatGatewaysOutput{NatGateways: f.natGateways}, nil
+}
+
+func TestCheckVPCQuota_ExceedsLimitAndAllowsReuseOrOverride(t *testing.T) {
+	ctx := context.Background()
+	st, err := state.Load(filepath.Join(t.TempDir(), "state.env"))
+	if err != nil {
+		t.Fatalf("state.Load: %v", err)
+	}
+	cl := &intent.Cluster{
+		Metadata: intent.Metadata{Name: "target-cluster", Region: "ap-southeast-2"},
+	}
+
+	fiveVPCs := []ec2types.Vpc{
+		{VpcId: aws.String("vpc-1"), Tags: []ec2types.Tag{{Key: aws.String("Name"), Value: aws.String("one-vpc")}, {Key: aws.String(tags.KeyCluster), Value: aws.String("other-1")}}},
+		{VpcId: aws.String("vpc-2"), Tags: []ec2types.Tag{{Key: aws.String("Name"), Value: aws.String("two-vpc")}}},
+		{VpcId: aws.String("vpc-3")},
+		{VpcId: aws.String("vpc-4")},
+		{VpcId: aws.String("vpc-5")},
+	}
+	ec2Fake := &hardeningFakeEC2{vpcs: fiveVPCs}
+	clients := &Clients{Region: "ap-southeast-2", PhaseEC2: ec2Fake}
+
+	// 1. 5 unrelated VPCs should fail with quota error.
+	err = checkVPCQuota(ctx, cl, st, clients)
+	if err == nil {
+		t.Fatalf("expected checkVPCQuota to fail when 5 unrelated VPCs exist")
+	}
+	if !strings.Contains(err.Error(), "has 5 VPCs (quota limit 5") || !strings.Contains(err.Error(), "vpc-1 (one-vpc) [cluster=other-1]") {
+		t.Fatalf("unexpected quota error message: %v", err)
+	}
+
+	// 2. BNKCTL_VPC_QUOTA=10 override should allow proceeding.
+	t.Setenv("BNKCTL_VPC_QUOTA", "10")
+	if err := checkVPCQuota(ctx, cl, st, clients); err != nil {
+		t.Fatalf("expected BNKCTL_VPC_QUOTA=10 override to pass, got: %v", err)
+	}
+	t.Setenv("BNKCTL_VPC_QUOTA", "")
+
+	// 3. Matching cluster tag on an existing VPC should allow reuse even at quota.
+	ec2Fake.vpcs[4].Tags = []ec2types.Tag{{Key: aws.String(tags.KeyCluster), Value: aws.String("target-cluster")}}
+	if err := checkVPCQuota(ctx, cl, st, clients); err != nil {
+		t.Fatalf("expected reusable cluster VPC to bypass quota failure, got: %v", err)
+	}
+}
+
+func TestPhase02VPCDown_SweepsBlockersAndDeletesMultipleVPCs(t *testing.T) {
+	origPoll := VPCSweepRetryInterval
+	VPCSweepRetryInterval = time.Millisecond
+	defer func() { VPCSweepRetryInterval = origPoll }()
+
+	ctx := context.Background()
+	st, err := state.Load(filepath.Join(t.TempDir(), "state.env"))
+	if err != nil {
+		t.Fatalf("state.Load: %v", err)
+	}
+	st.Set("VPC_ID", "vpc-state")
+	st.Set("IGW_ID", "igw-state")
+
+	cl := &intent.Cluster{
+		Metadata: intent.Metadata{Name: "sweep-cluster", Region: "ap-southeast-2"},
+	}
+
+	ec2Fake := &hardeningFakeEC2{
+		vpcs: []ec2types.Vpc{
+			{VpcId: aws.String("vpc-state")},
+			{VpcId: aws.String("vpc-orphan")},
+		},
+		deleteVPCFailuresLeft: 1, // First DeleteVpc fails with DependencyViolation -> triggers sweepVPCBlockers
+		eices: []ec2types.Ec2InstanceConnectEndpoint{
+			{InstanceConnectEndpointId: aws.String("eice-residual"), State: ec2types.Ec2InstanceConnectEndpointStateCreateComplete},
+		},
+		enis: []ec2types.NetworkInterface{
+			{NetworkInterfaceId: aws.String("eni-avail-1"), Status: ec2types.NetworkInterfaceStatusAvailable},
+		},
+		sgs: []ec2types.SecurityGroup{
+			{GroupId: aws.String("sg-default"), GroupName: aws.String("default")},
+			{
+				GroupId:   aws.String("sg-worker"),
+				GroupName: aws.String("worker"),
+				IpPermissions: []ec2types.IpPermission{
+					{IpProtocol: aws.String("tcp"), FromPort: aws.Int32(22), ToPort: aws.Int32(22), UserIdGroupPairs: []ec2types.UserIdGroupPair{{GroupId: aws.String("sg-jumphost")}}},
+				},
+				IpPermissionsEgress: []ec2types.IpPermission{
+					{IpProtocol: aws.String("-1"), IpRanges: []ec2types.IpRange{{CidrIp: aws.String("0.0.0.0/0")}}},
+				},
+			},
+			{GroupId: aws.String("sg-jumphost"), GroupName: aws.String("jumphost")},
+		},
+		subnets: []ec2types.Subnet{
+			{SubnetId: aws.String("subnet-residual-1")},
+		},
+		routeTables: []ec2types.RouteTable{
+			{
+				RouteTableId: aws.String("rtb-main"),
+				Associations: []ec2types.RouteTableAssociation{{Main: aws.Bool(true), RouteTableAssociationId: aws.String("rtbassoc-main")}},
+			},
+			{
+				RouteTableId: aws.String("rtb-custom"),
+				Associations: []ec2types.RouteTableAssociation{{Main: aws.Bool(false), RouteTableAssociationId: aws.String("rtbassoc-custom")}},
+			},
+		},
+		igws: []ec2types.InternetGateway{
+			{InternetGatewayId: aws.String("igw-orphan")},
+		},
+	}
+
+	clients := &Clients{Region: "ap-southeast-2", PhaseEC2: ec2Fake}
+	if err := Phase02VPCDown(ctx, cl, st, clients, false); err != nil {
+		t.Fatalf("Phase02VPCDown failed: %v", err)
+	}
+
+	if len(ec2Fake.deletedEICEs) == 0 || ec2Fake.deletedEICEs[0] != "eice-residual" {
+		t.Errorf("expected EICE eice-residual to be swept, got %v", ec2Fake.deletedEICEs)
+	}
+	if len(ec2Fake.deletedENIs) == 0 || ec2Fake.deletedENIs[0] != "eni-avail-1" {
+		t.Errorf("expected available ENI eni-avail-1 to be swept, got %v", ec2Fake.deletedENIs)
+	}
+	if len(ec2Fake.revokedIngressGroupIDs) == 0 || ec2Fake.revokedIngressGroupIDs[0] != "sg-worker" {
+		t.Errorf("expected ingress rules on sg-worker to be revoked, got %v", ec2Fake.revokedIngressGroupIDs)
+	}
+	if len(ec2Fake.deletedSGs) == 0 {
+		t.Errorf("expected non-default SGs deleted, got %v", ec2Fake.deletedSGs)
+	}
+	for _, sg := range ec2Fake.deletedSGs {
+		if sg == "sg-default" {
+			t.Errorf("expected sg-default to be skipped, got %v", ec2Fake.deletedSGs)
+		}
+	}
+	if len(ec2Fake.deletedSubnets) == 0 || ec2Fake.deletedSubnets[0] != "subnet-residual-1" {
+		t.Errorf("expected residual subnet to be swept, got %v", ec2Fake.deletedSubnets)
+	}
+	if len(ec2Fake.disassociatedRTAssocIDs) == 0 || ec2Fake.disassociatedRTAssocIDs[0] != "rtbassoc-custom" {
+		t.Errorf("expected non-main route table association to be disassociated, got %v", ec2Fake.disassociatedRTAssocIDs)
+	}
+	for _, rtb := range ec2Fake.deletedRouteTables {
+		if rtb == "rtb-main" {
+			t.Errorf("expected main route table rtb-main to be skipped, got %v", ec2Fake.deletedRouteTables)
+		}
+	}
+	if len(ec2Fake.deletedVPCs) != 2 || ec2Fake.deletedVPCs[0] != "vpc-state" || ec2Fake.deletedVPCs[1] != "vpc-orphan" {
+		t.Errorf("expected both vpc-state and vpc-orphan to be deleted, got %v", ec2Fake.deletedVPCs)
+	}
+	if st.Get("VPC_ID") != "" || st.Get("IGW_ID") != "" {
+		t.Errorf("expected VPC_ID and IGW_ID cleared from state")
+	}
+}
+
+func TestPhase03SubnetsDown_SweepsAvailableENIsAndDefersDependencyViolation(t *testing.T) {
+	ctx := context.Background()
+	st, err := state.Load(filepath.Join(t.TempDir(), "state.env"))
+	if err != nil {
+		t.Fatalf("state.Load: %v", err)
+	}
+	st.Set("VPC_ID", "vpc-123")
+	st.Set("BNK_EXT_SUBNET", "subnet-retry-ok")
+	st.Set("BNK_INT_SUBNET", "subnet-stuck")
+
+	cl := &intent.Cluster{
+		Metadata: intent.Metadata{Name: "subnet-cluster", Region: "ap-southeast-2"},
+	}
+
+	ec2Fake := &hardeningFakeEC2{
+		enis: []ec2types.NetworkInterface{
+			{NetworkInterfaceId: aws.String("eni-subnet-avail"), Status: ec2types.NetworkInterfaceStatusAvailable},
+		},
+		subnets: []ec2types.Subnet{
+			{SubnetId: aws.String("subnet-from-vpc")},
+		},
+		deleteSubnetFailCounts: map[string]int{
+			"subnet-retry-ok": 1,   // succeeds on 2nd attempt
+			"subnet-stuck":    100, // persistent DependencyViolation -> deferred to Phase02VPCDown without failing Phase03
+		},
+	}
+
+	clients := &Clients{Region: "ap-southeast-2", PhaseEC2: ec2Fake}
+	if err := Phase03SubnetsDown(ctx, cl, st, clients, false); err != nil {
+		t.Fatalf("Phase03SubnetsDown should defer persistent DependencyViolation instead of failing, got: %v", err)
+	}
+
+	if len(ec2Fake.deletedENIs) == 0 || ec2Fake.deletedENIs[0] != "eni-subnet-avail" {
+		t.Errorf("expected available subnet ENI to be deleted, got %v", ec2Fake.deletedENIs)
+	}
+	deletedSet := make(map[string]bool)
+	for _, s := range ec2Fake.deletedSubnets {
+		deletedSet[s] = true
+	}
+	if !deletedSet["subnet-retry-ok"] || !deletedSet["subnet-from-vpc"] {
+		t.Errorf("expected subnet-retry-ok and subnet-from-vpc to be deleted, got %v", ec2Fake.deletedSubnets)
+	}
+	if st.Get("BNK_EXT_SUBNET") != "" || st.Get("BNK_INT_SUBNET") != "" {
+		t.Errorf("expected subnet state keys to be cleared")
+	}
+}
+
+func TestPhase17bJumphostDown_RevokesCrossSGReferences(t *testing.T) {
+	ctx := context.Background()
+	st, err := state.Load(filepath.Join(t.TempDir(), "state.env"))
+	if err != nil {
+		t.Fatalf("state.Load: %v", err)
+	}
+	st.Set("VPC_ID", "vpc-123")
+	st.Set("JUMPHOST_SG_ID", "sg-jumphost")
+
+	cl := &intent.Cluster{
+		Metadata: intent.Metadata{Name: "jh-cluster", Region: "ap-southeast-2"},
+	}
+
+	ec2Fake := &hardeningFakeEC2{
+		sgs: []ec2types.SecurityGroup{
+			{
+				GroupId:   aws.String("sg-eks-node"),
+				GroupName: aws.String("eks-node"),
+				IpPermissions: []ec2types.IpPermission{
+					{
+						IpProtocol:       aws.String("tcp"),
+						FromPort:         aws.Int32(22),
+						ToPort:           aws.Int32(22),
+						UserIdGroupPairs: []ec2types.UserIdGroupPair{{GroupId: aws.String("sg-jumphost")}},
+					},
+				},
+			},
+			{
+				GroupId:   aws.String("sg-jumphost"),
+				GroupName: aws.String("jh-cluster-jumphost-sg"),
+			},
+		},
+	}
+
+	clients := &Clients{Region: "ap-southeast-2", PhaseEC2: ec2Fake}
+	if err := Phase17bJumphostDown(ctx, cl, st, clients, false); err != nil {
+		t.Fatalf("Phase17bJumphostDown failed: %v", err)
+	}
+
+	if len(ec2Fake.revokedIngressGroupIDs) != 1 || ec2Fake.revokedIngressGroupIDs[0] != "sg-eks-node" {
+		t.Errorf("expected cross-SG ingress reference on sg-eks-node to be revoked, got %v", ec2Fake.revokedIngressGroupIDs)
+	}
+	if len(ec2Fake.deletedSGs) != 1 || ec2Fake.deletedSGs[0] != "sg-jumphost" {
+		t.Errorf("expected sg-jumphost to be deleted, got %v", ec2Fake.deletedSGs)
+	}
+	if st.Get("JUMPHOST_SG_ID") != "" {
+		t.Errorf("expected JUMPHOST_SG_ID to be cleared")
+	}
+}
+
+func TestHydrateMissingStateFromAWS_PartialStateWithVPCID(t *testing.T) {
+	ctx := context.Background()
+	st, err := state.Load(filepath.Join(t.TempDir(), "state.env"))
+	if err != nil {
+		t.Fatalf("state.Load: %v", err)
+	}
+	// Simulate partial state where VPC_ID was saved before a crash, but subnets/IGW/NAT were not.
+	st.Set("VPC_ID", "vpc-partial")
+
+	cl := &intent.Cluster{
+		Metadata: intent.Metadata{Name: "partial-cluster", Region: "ap-southeast-2"},
+	}
+
+	ec2Fake := &hardeningFakeEC2{
+		igws: []ec2types.InternetGateway{
+			{InternetGatewayId: aws.String("igw-hydrated")},
+		},
+		subnets: []ec2types.Subnet{
+			{
+				SubnetId: aws.String("subnet-pub-0"),
+				Tags:     []ec2types.Tag{{Key: aws.String("Name"), Value: aws.String("partial-cluster-public-0")}},
+			},
+			{
+				SubnetId: aws.String("subnet-priv-0"),
+				Tags:     []ec2types.Tag{{Key: aws.String("Name"), Value: aws.String("partial-cluster-private-0")}},
+			},
+			{
+				SubnetId: aws.String("subnet-ext"),
+				Tags:     []ec2types.Tag{{Key: aws.String("Name"), Value: aws.String("partial-cluster-bnk-ext")}},
+			},
+			{
+				SubnetId: aws.String("subnet-int"),
+				Tags:     []ec2types.Tag{{Key: aws.String("Name"), Value: aws.String("partial-cluster-bnk-int")}},
+			},
+		},
+		natGateways: []ec2types.NatGateway{
+			{
+				NatGatewayId: aws.String("nat-hydrated"),
+				State:        ec2types.NatGatewayStateAvailable,
+				NatGatewayAddresses: []ec2types.NatGatewayAddress{
+					{AllocationId: aws.String("eipalloc-hydrated")},
+				},
+			},
+		},
+	}
+
+	clients := &Clients{
+		Region:   "ap-southeast-2",
+		STS:      &fakePhaseSTS{},
+		PhaseEC2: ec2Fake,
+		PhaseIAM: &fakePhaseIAM{},
+		PhaseEKS: &fakePhaseEKS{},
+	}
+
+	hydrateMissingStateFromAWS(ctx, cl, st, clients)
+
+	expected := map[string]string{
+		"VPC_ID":           "vpc-partial",
+		"IGW_ID":           "igw-hydrated",
+		"PUBLIC_SUBNET_0":  "subnet-pub-0",
+		"PUBLIC_SUBNETS":   "subnet-pub-0",
+		"MGMT_SUBNET":      "subnet-pub-0",
+		"PRIVATE_SUBNET_0": "subnet-priv-0",
+		"PRIVATE_SUBNETS":  "subnet-priv-0",
+		"BNK_EXT_SUBNET":   "subnet-ext",
+		"SUBNET_EXT_ID":    "subnet-ext",
+		"BNK_INT_SUBNET":   "subnet-int",
+		"SUBNET_INT_ID":    "subnet-int",
+		"NAT_GW_ID":        "nat-hydrated",
+		"NAT_EIP_ALLOC_ID": "eipalloc-hydrated",
+	}
+	for k, want := range expected {
+		if got := st.Get(k); got != want {
+			t.Errorf("state[%s] = %q, want %q", k, got, want)
+		}
+	}
+}
+
+func TestFindVPCsByTag_CollectsAllMatchingTagConventions(t *testing.T) {
+	ctx := context.Background()
+	ec2Fake := &hardeningFakeEC2{
+		respectFilters: true,
+		vpcs: []ec2types.Vpc{
+			{
+				VpcId: aws.String("vpc-primary"),
+				Tags:  []ec2types.Tag{{Key: aws.String(tags.KeyCluster), Value: aws.String("multi-cluster")}},
+			},
+			{
+				VpcId: aws.String("vpc-legacy-tag"),
+				Tags:  []ec2types.Tag{{Key: aws.String("bnk.f5.com/cluster"), Value: aws.String("multi-cluster")}},
+			},
+			{
+				VpcId: aws.String("vpc-name-tag"),
+				Tags:  []ec2types.Tag{{Key: aws.String("Name"), Value: aws.String("multi-cluster-vpc")}},
+			},
+			{
+				VpcId: aws.String("vpc-unrelated"),
+				Tags:  []ec2types.Tag{{Key: aws.String(tags.KeyCluster), Value: aws.String("other-cluster")}},
+			},
+		},
+	}
+
+	ids, err := findVPCsByTag(ctx, ec2Fake, "multi-cluster")
+	if err != nil {
+		t.Fatalf("findVPCsByTag: %v", err)
+	}
+	want := []string{"vpc-primary", "vpc-legacy-tag", "vpc-name-tag"}
+	if len(ids) != len(want) {
+		t.Fatalf("findVPCsByTag = %v, want %v", ids, want)
+	}
+	for i := range want {
+		if ids[i] != want[i] {
+			t.Errorf("ids[%d] = %q, want %q", i, ids[i], want[i])
+		}
+	}
+}
+
+func TestPhase02VPC_ReusesLegacyClusterTaggedVPC(t *testing.T) {
+	ctx := context.Background()
+	st, err := state.Load(filepath.Join(t.TempDir(), "state.env"))
+	if err != nil {
+		t.Fatalf("state.Load: %v", err)
+	}
+	cl := &intent.Cluster{
+		Metadata: intent.Metadata{Name: "legacy-cluster", Region: "ap-southeast-2"},
+		Network:  intent.Network{VPCCidr: "10.0.0.0/16"},
+	}
+	ec2Fake := &hardeningFakeEC2{
+		respectFilters: true,
+		vpcs: []ec2types.Vpc{
+			{
+				VpcId: aws.String("vpc-legacy-reuse"),
+				Tags:  []ec2types.Tag{{Key: aws.String("bnk.f5.com/cluster"), Value: aws.String("legacy-cluster")}},
+			},
+		},
+	}
+	clients := &Clients{Region: "ap-southeast-2", PhaseEC2: ec2Fake}
+	if err := Phase02VPC(ctx, cl, st, clients, false); err != nil {
+		t.Fatalf("Phase02VPC: %v", err)
+	}
+	if got := st.Get("VPC_ID"); got != "vpc-legacy-reuse" {
+		t.Errorf("VPC_ID = %q, want vpc-legacy-reuse", got)
+	}
+}
+
+func TestPhase17bJumphostDown_TagDiscoveryAndMissingVPCID(t *testing.T) {
+	ctx := context.Background()
+	st, err := state.Load(filepath.Join(t.TempDir(), "state.env"))
+	if err != nil {
+		t.Fatalf("state.Load: %v", err)
+	}
+	// Neither VPC_ID nor JUMPHOST_SG_ID is in state.env.
+	cl := &intent.Cluster{
+		Metadata: intent.Metadata{Name: "jh-discover", Region: "ap-southeast-2"},
+	}
+
+	ec2Fake := &hardeningFakeEC2{
+		sgs: []ec2types.SecurityGroup{
+			{
+				GroupId:   aws.String("sg-eks-node"),
+				GroupName: aws.String("eks-node"),
+				VpcId:     aws.String("vpc-discovered"),
+				IpPermissions: []ec2types.IpPermission{
+					{
+						IpProtocol:       aws.String("tcp"),
+						FromPort:         aws.Int32(22),
+						ToPort:           aws.Int32(22),
+						UserIdGroupPairs: []ec2types.UserIdGroupPair{{GroupId: aws.String("sg-jumphost")}},
+					},
+				},
+			},
+			{
+				GroupId:   aws.String("sg-jumphost"),
+				GroupName: aws.String("jh-discover-jumphost-sg"),
+				VpcId:     aws.String("vpc-discovered"),
+				IpPermissions: []ec2types.IpPermission{
+					{
+						IpProtocol: aws.String("-1"),
+						IpRanges:   []ec2types.IpRange{{CidrIp: aws.String("10.0.0.0/16")}},
+					},
+				},
+			},
+		},
+	}
+
+	clients := &Clients{Region: "ap-southeast-2", PhaseEC2: ec2Fake}
+	if err := Phase17bJumphostDown(ctx, cl, st, clients, false); err != nil {
+		t.Fatalf("Phase17bJumphostDown failed: %v", err)
+	}
+
+	// Only sg-jumphost should be deleted (not sg-eks-node).
+	if len(ec2Fake.deletedSGs) != 1 || ec2Fake.deletedSGs[0] != "sg-jumphost" {
+		t.Errorf("expected only sg-jumphost to be deleted, got %v", ec2Fake.deletedSGs)
+	}
+	// Both sg-jumphost's own ingress and sg-eks-node's cross-reference should be revoked once each.
+	if len(ec2Fake.revokedIngressGroupIDs) != 2 ||
+		ec2Fake.revokedIngressGroupIDs[0] != "sg-jumphost" ||
+		ec2Fake.revokedIngressGroupIDs[1] != "sg-eks-node" {
+		t.Errorf("expected ingress revocations [sg-jumphost, sg-eks-node], got %v", ec2Fake.revokedIngressGroupIDs)
 	}
 }

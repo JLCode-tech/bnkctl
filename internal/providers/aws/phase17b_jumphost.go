@@ -509,6 +509,18 @@ func Phase17bJumphostDown(ctx context.Context, cl *intent.Cluster, st *state.Sta
 			}
 		}
 	}
+	if eiceID == "" && cl != nil && cl.Metadata.Name != "" {
+		if listOut, lerr := c.PhaseEC2.DescribeInstanceConnectEndpoints(ctx, &ec2.DescribeInstanceConnectEndpointsInput{
+			Filters: []ec2types.Filter{tags.ClusterFilter(cl.Metadata.Name)},
+		}); lerr == nil && listOut != nil {
+			for _, ep := range listOut.InstanceConnectEndpoints {
+				if ep.InstanceConnectEndpointId != nil && ep.State != ec2types.Ec2InstanceConnectEndpointStateDeleteComplete {
+					eiceID = *ep.InstanceConnectEndpointId
+					break
+				}
+			}
+		}
+	}
 	if eiceID != "" {
 		_, err := c.PhaseEC2.DeleteInstanceConnectEndpoint(ctx, &ec2.DeleteInstanceConnectEndpointInput{
 			InstanceConnectEndpointId: aws.String(eiceID),
@@ -586,20 +598,72 @@ func Phase17bJumphostDown(ctx context.Context, cl *intent.Cluster, st *state.Sta
 	if eksSG == "" {
 		eksSG = st.Get("EKS_CLUSTER_SG_ID")
 	}
-	for _, sgID := range []string{jhSG, eiceSG, eksSG} {
-		if sgID != "" {
-			revokeAllSecurityGroupRules(ctx, c, sgID)
+	if eksSG != "" {
+		revokeAllSecurityGroupRules(ctx, c, eksSG)
+	}
+
+	targetSGs := []struct {
+		key string
+		id  string
+	}{
+		{key: "JUMPHOST_EICE_SG_ID", id: eiceSG},
+		{key: "JUMPHOST_SG_ID", id: jhSG},
+	}
+	if jhSG == "" && eiceSG == "" && cl != nil && cl.Metadata.Name != "" {
+		sgName := cl.Metadata.Name + "-jumphost-sg"
+		altName := cl.Metadata.Name + "-jumphost"
+		if sgOut, serr := c.PhaseEC2.DescribeSecurityGroups(ctx, &ec2.DescribeSecurityGroupsInput{
+			Filters: []ec2types.Filter{
+				tags.ClusterFilter(cl.Metadata.Name),
+			},
+		}); serr == nil && sgOut != nil {
+			for _, sg := range sgOut.SecurityGroups {
+				if sg.GroupId == nil || *sg.GroupId == "" {
+					continue
+				}
+				gname := aws.ToString(sg.GroupName)
+				isJumphostSG := gname == sgName || gname == altName
+				if !isJumphostSG {
+					for _, t := range sg.Tags {
+						k := aws.ToString(t.Key)
+						v := aws.ToString(t.Value)
+						if (k == tags.KeyComponent && v == tags.CompJumphostSG) ||
+							(k == "Name" && (v == sgName || v == altName)) {
+							isJumphostSG = true
+							break
+						}
+					}
+				}
+				if isJumphostSG {
+					targetSGs = append(targetSGs, struct {
+						key string
+						id  string
+					}{key: "JUMPHOST_SG_ID", id: *sg.GroupId})
+				}
+			}
 		}
 	}
-	for _, key := range []string{"JUMPHOST_EICE_SG_ID", "JUMPHOST_SG_ID"} {
-		if sgID := st.Get(key); sgID != "" {
-			_, err := c.PhaseEC2.DeleteSecurityGroup(ctx, &ec2.DeleteSecurityGroupInput{
-				GroupId: aws.String(sgID),
-			})
-			if err != nil && !awsmw.IsNotFound(err) && !strings.Contains(err.Error(), "CannotDelete") && !strings.Contains(err.Error(), "DependencyViolation") {
-				return fmt.Errorf("phase 17b jumphost down: DeleteSecurityGroup %s: %w", sgID, err)
+
+	vpcID := st.Get("VPC_ID")
+	deletedSGs := map[string]bool{}
+	for _, item := range targetSGs {
+		if item.id == "" || deletedSGs[item.id] {
+			continue
+		}
+		revokeReferencesToSG(ctx, c, vpcID, item.id)
+		_, err := c.PhaseEC2.DeleteSecurityGroup(ctx, &ec2.DeleteSecurityGroupInput{
+			GroupId: aws.String(item.id),
+		})
+		if err != nil && !awsmw.IsNotFound(err) {
+			if awsmw.IsDependencyViolation(err) || strings.Contains(err.Error(), "CannotDelete") {
+				fmt.Fprintf(os.Stderr, "phase 17b jumphost down: warning: security group %s still has dependencies (%v); deferring to VPC blocker sweep\n", item.id, err)
+			} else {
+				return fmt.Errorf("phase 17b jumphost down: DeleteSecurityGroup %s: %w", item.id, err)
 			}
-			st.Delete(key)
+		}
+		deletedSGs[item.id] = true
+		if item.key != "" {
+			st.Delete(item.key)
 		}
 	}
 
@@ -627,6 +691,83 @@ func Phase17bJumphostDown(ctx context.Context, cl *intent.Cluster, st *state.Sta
 	}
 
 	return st.Save()
+}
+
+func permReferencesSG(perm ec2types.IpPermission, targetSGID string) bool {
+	for _, pair := range perm.UserIdGroupPairs {
+		if pair.GroupId != nil && *pair.GroupId == targetSGID {
+			return true
+		}
+	}
+	return false
+}
+
+// revokeReferencesToSG revokes all ingress/egress rules on targetSGID as well as any
+// ingress/egress rules on other security groups in vpcID that reference targetSGID.
+func revokeReferencesToSG(ctx context.Context, c *Clients, vpcID, targetSGID string) {
+	if c == nil || c.PhaseEC2 == nil || targetSGID == "" {
+		return
+	}
+	if desc, err := c.PhaseEC2.DescribeSecurityGroups(ctx, &ec2.DescribeSecurityGroupsInput{
+		GroupIds: []string{targetSGID},
+	}); err == nil && desc != nil && len(desc.SecurityGroups) > 0 {
+		sg := desc.SecurityGroups[0]
+		if vpcID == "" && sg.VpcId != nil {
+			vpcID = *sg.VpcId
+		}
+		if len(sg.IpPermissions) > 0 {
+			_, _ = c.PhaseEC2.RevokeSecurityGroupIngress(ctx, &ec2.RevokeSecurityGroupIngressInput{
+				GroupId:       aws.String(targetSGID),
+				IpPermissions: sg.IpPermissions,
+			})
+		}
+		if len(sg.IpPermissionsEgress) > 0 {
+			_, _ = c.PhaseEC2.RevokeSecurityGroupEgress(ctx, &ec2.RevokeSecurityGroupEgressInput{
+				GroupId:       aws.String(targetSGID),
+				IpPermissions: sg.IpPermissionsEgress,
+			})
+		}
+	}
+	if vpcID == "" {
+		return
+	}
+	out, err := c.PhaseEC2.DescribeSecurityGroups(ctx, &ec2.DescribeSecurityGroupsInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("vpc-id"), Values: []string{vpcID}},
+		},
+	})
+	if err != nil || out == nil {
+		return
+	}
+	for _, sg := range out.SecurityGroups {
+		if sg.GroupId == nil || *sg.GroupId == targetSGID {
+			continue
+		}
+		var matchingIngress []ec2types.IpPermission
+		for _, perm := range sg.IpPermissions {
+			if permReferencesSG(perm, targetSGID) {
+				matchingIngress = append(matchingIngress, perm)
+			}
+		}
+		if len(matchingIngress) > 0 {
+			_, _ = c.PhaseEC2.RevokeSecurityGroupIngress(ctx, &ec2.RevokeSecurityGroupIngressInput{
+				GroupId:       sg.GroupId,
+				IpPermissions: matchingIngress,
+			})
+		}
+		var matchingEgress []ec2types.IpPermission
+		for _, perm := range sg.IpPermissionsEgress {
+			if permReferencesSG(perm, targetSGID) {
+				matchingEgress = append(matchingEgress, perm)
+			}
+		}
+		if len(matchingEgress) > 0 {
+			_, _ = c.PhaseEC2.RevokeSecurityGroupEgress(ctx, &ec2.RevokeSecurityGroupEgressInput{
+				GroupId:       sg.GroupId,
+				IpPermissions: matchingEgress,
+			})
+		}
+	}
 }
 
 func revokeAllSecurityGroupRules(ctx context.Context, c *Clients, sgID string) {

@@ -1069,6 +1069,9 @@ func renderUnifiedCNEInstance(cl *intent.Cluster, u *provider.UnderlayContext, p
 			imageReg = cl.Bnk.ImageRegistry
 		}
 	}
+	if u.DataplaneDriver == provider.DriverDPDKPCI && mtu > 1500 {
+		mtu = 1500
+	}
 
 	var nadNames []string
 	var tmmIfaces []string
@@ -1088,8 +1091,9 @@ func renderUnifiedCNEInstance(cl *intent.Cluster, u *provider.UnderlayContext, p
 
 	// Build TMM environment variables
 	tmmEnvMap := map[string]string{
-		"TMM_DEFAULT_MTU": fmt.Sprintf("%d", mtu),
-		"ZEBOS_STATE":     "legacy",
+		"TMM_DEFAULT_MTU":   fmt.Sprintf("%d", mtu),
+		"ZEBOS_STATE":       "legacy",
+		"TMM_SOCAT_DISABLE": "1",
 	}
 	if u.DataplaneDriver != provider.DriverVirtio {
 		tmmEnvMap["TMM_MTU"] = fmt.Sprintf("%d", mtu)
@@ -1140,8 +1144,9 @@ func renderUnifiedCNEInstance(cl *intent.Cluster, u *provider.UnderlayContext, p
 	case provider.DriverDPDKPCI:
 		tmmEnvMap["TMM_GENERIC_SOCKET_DRIVER"] = "true"
 		tmmEnvMap["TMM_MAPRES_ADDL_VETHS_ON_DP"] = "TRUE"
-		extIf := "ens6"
-		extPCI := "0000:00:06.0"
+		tmmEnvMap["TMM_SOCAT_DISABLE"] = "1"
+		extIf := "ens8"
+		extPCI := "0000:00:08.0"
 		intIf := "ens7"
 		intPCI := "0000:00:07.0"
 		if len(u.DataplaneNodes) > 0 {
@@ -1165,11 +1170,11 @@ func renderUnifiedCNEInstance(cl *intent.Cluster, u *provider.UnderlayContext, p
 			}
 		}
 		extIfUpper := strings.ToUpper(strings.ReplaceAll(extIf, "-", "_"))
-		tmmEnvMap["ROBIN_VFIO_RESOURCE_1"] = "PCIDEVICE_INTEL_COM_" + extIfUpper
+		tmmEnvMap["ROBIN_VFIO_RESOURCE_1"] = extIfUpper
 		tmmEnvMap["PCIDEVICE_INTEL_COM_"+extIfUpper] = extPCI
 		if len(u.Networks) > 1 {
 			intIfUpper := strings.ToUpper(strings.ReplaceAll(intIf, "-", "_"))
-			tmmEnvMap["ROBIN_VFIO_RESOURCE_2"] = "PCIDEVICE_INTEL_COM_" + intIfUpper
+			tmmEnvMap["ROBIN_VFIO_RESOURCE_2"] = intIfUpper
 			tmmEnvMap["PCIDEVICE_INTEL_COM_"+intIfUpper] = intPCI
 		}
 	}
@@ -1381,6 +1386,9 @@ func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 	if mtu <= 0 {
 		mtu = 1500
 	}
+	if u.DataplaneDriver == provider.DriverDPDKPCI && mtu > 1500 {
+		mtu = 1500
+	}
 
 	extStart, extEnd, extPrefLen := ipRangeFromSelfIPs(ext.SelfIPs, ext.SubnetCIDR)
 	snatStart, _ := snatRangeFromSubnet(ext.SubnetCIDR, extStart, extEnd)
@@ -1497,7 +1505,7 @@ func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 	}
 
 	az := ""
-	if cl != nil {
+	if cl != nil && cl.Bnk != nil && strings.EqualFold(cl.Bnk.ControllerEnv["PLATFORM_TYPE"], "AWS") {
 		if cl.Metadata.Zone != "" {
 			az = cl.Metadata.Zone
 		} else if len(cl.Network.AZs) > 0 {
@@ -1639,7 +1647,22 @@ func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 			})
 		}
 	}
-	if u.PodCIDR != "" {
+	var podCIDRs []string
+	if cl != nil && len(cl.Network.Subnets.PrivateList) > 0 {
+		for _, sub := range cl.Network.Subnets.PrivateList {
+			if trimmed := strings.TrimSpace(sub.CIDR); trimmed != "" {
+				podCIDRs = append(podCIDRs, trimmed)
+			}
+		}
+	}
+	if len(podCIDRs) == 0 && u.PodCIDR != "" {
+		for _, part := range strings.Split(u.PodCIDR, ",") {
+			if trimmed := strings.TrimSpace(part); trimmed != "" {
+				podCIDRs = append(podCIDRs, trimmed)
+			}
+		}
+	}
+	if len(podCIDRs) > 0 {
 		gw := ext.GatewayIP
 		if intNet != nil && intNet.GatewayIP != "" {
 			gw = intNet.GatewayIP
@@ -1647,7 +1670,7 @@ func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 		if gw != "" {
 			staticRoutes = append(staticRoutes, map[string]any{
 				"name":         "pod-cidr",
-				"destinations": []string{u.PodCIDR},
+				"destinations": podCIDRs,
 				"nextHop":      gw,
 			})
 		}
@@ -1793,49 +1816,140 @@ func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 	}
 
 	netCombined := strings.TrimSpace(string(infraBytes)) + "\n---\n" + strings.TrimSpace(string(gwsBytes)) + "\n"
+	if u.CloudName == intent.ProviderAWS && (u.DataplaneDriver == "" || u.DataplaneDriver == provider.DriverDPDKPCI) {
+		tmmInitTcl := `set_from_env  POD_IP  POD_IP  [info hostname]
+
+    profile tcp nagledisable {
+      default_name tcp
+      nagle disable
+    }
+
+    profile tcp dia-tcp {
+      default_name tcp
+    }
+
+    profile sctp dia-sctp {
+      default_name sctp
+    }
+
+    profile http http_socket {
+      default_name http
+    }
+    
+    pool pool1 {
+
+    }
+    
+    snatpool overlay_pool {
+
+    }
+
+    file_reload {
+      file_name /opt/lib/tmm/user_conf.tcl
+      interval 1
+    }
+
+    profile genericmsg gm_proto_for_gtp {
+      app-service none
+      disable-parser yes
+      message-terminator none
+      no-response yes
+      description none
+      max-egress-buffer 32768
+      max-message-size 32768
+    }
+
+    profile messagerouter gm_router_for_gtp {
+      name "gm_router_for_gtp"
+      app-service none
+      irule-scope-message no
+    }
+
+	bigdb tm.tcpsegmentationoffload disable
+
+	bigdb tm.tcpwoodsidefasterrecovery disable
+
+	bigdb tm.tcplargereceiveoffload disable
+
+    pool blobd_pool {
+      member 169.254.0.253 9222
+    }
+
+    profile tcp blobd_tcp {
+      default_name tcp
+    }
+
+    # Virtual for blobd
+    virtual $POD_IP 9222 {
+      name blobd_virtual
+      profile blobd_tcp
+      vlan enable all
+      snat_automap
+      pool blobd_pool
+      auto_lasthop off
+    }
+`
+		tmmInitObj := map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "tmm-init",
+				"namespace": bnkconst.InstanceNamespace,
+			},
+			"data": map[string]string{
+				"tmm_init.tcl":  tmmInitTcl,
+				"user_conf.tcl": "bigdb tm.tcpsegmentationoffload disable\nbigdb tm.tcplargereceiveoffload disable\npool pool1 {\n}\n",
+			},
+		}
+		if cmBytes, cmErr := yaml.Marshal(tmmInitObj); cmErr == nil {
+			netCombined += "---\n" + strings.TrimSpace(string(cmBytes)) + "\n"
+		}
+	}
+	aiGwDNS := strings.HasPrefix(prof.Version, "2.4.1") || strings.HasPrefix(prof.Version, "2.4.2") || strings.HasPrefix(prof.Version, "2.5")
 	if cl != nil && cl.Bnk != nil && cl.Bnk.AIGateway != nil {
-		if cl.Bnk.AIGateway.Enabled || cl.Bnk.AIGateway.DNSResolver {
-			dnsIP := "10.96.0.10"
-			if u != nil && u.ServiceCIDR != "" {
-				if ip, ipNet, err := net.ParseCIDR(u.ServiceCIDR); err == nil && ipNet != nil {
-					if v4 := ip.Mask(ipNet.Mask).To4(); v4 != nil {
-						dnsIP = net.IPv4(v4[0], v4[1], v4[2], 10).String()
-					}
+		aiGwDNS = cl.Bnk.AIGateway.Enabled || cl.Bnk.AIGateway.DNSResolver
+	}
+	if aiGwDNS {
+		dnsIP := "10.96.0.10"
+		if u != nil && u.ServiceCIDR != "" {
+			if ip, ipNet, err := net.ParseCIDR(u.ServiceCIDR); err == nil && ipNet != nil {
+				if v4 := ip.Mask(ipNet.Mask).To4(); v4 != nil {
+					dnsIP = net.IPv4(v4[0], v4[1], v4[2], 10).String()
 				}
 			}
-			dnsObj := map[string]any{
-				"apiVersion": "k8s.f5net.com/v1",
-				"kind":       "F5BigDnsCache",
-				"metadata": map[string]any{
-					"name":      "aigw-dns-resolver",
-					"namespace": bnkconst.InstanceNamespace,
-				},
-				"spec": map[string]any{
-					"cacheType": "net-resolver",
-					"netResolver": map[string]any{
-						"forwardZones": []map[string]any{
-							{
-								"forwardZone": ".",
-								"nameServers": []map[string]any{
-									{
-										"ipAddress": dnsIP,
-										"port":      53,
-									},
+		}
+		dnsObj := map[string]any{
+			"apiVersion": "k8s.f5net.com/v1",
+			"kind":       "F5BigDnsCache",
+			"metadata": map[string]any{
+				"name":      "aigw-dns-resolver",
+				"namespace": bnkconst.InstanceNamespace,
+			},
+			"spec": map[string]any{
+				"cacheType": "net-resolver",
+				"netResolver": map[string]any{
+					"forwardZones": []map[string]any{
+						{
+							"forwardZone": ".",
+							"nameServers": []map[string]any{
+								{
+									"ipAddress": dnsIP,
+									"port":      53,
 								},
 							},
 						},
 					},
 				},
-			}
-			if dnsBytes, mErr := yaml.Marshal(dnsObj); mErr == nil {
-				netCombined += "---\n" + strings.TrimSpace(string(dnsBytes)) + "\n"
-			}
+			},
 		}
-		// Note: In BNK 2.4+ gateway-infra mode (USE_GATEWAY_SETTINGS=true), default egress
-		// (0.0.0.0/0 -> ext.GatewayIP) is programmed via Infra.spec.staticRoutes above.
-		// Applying a legacy F5SPKStaticRoute when USE_GATEWAY_SETTINGS=true triggers a nil
-		// pointer panic in f5-cne-controller's validation webhook (getStaticrouteList).
+		if dnsBytes, mErr := yaml.Marshal(dnsObj); mErr == nil {
+			netCombined += "---\n" + strings.TrimSpace(string(dnsBytes)) + "\n"
+		}
 	}
+	// Note: In BNK 2.4+ gateway-infra mode (USE_GATEWAY_SETTINGS=true), default egress
+	// (0.0.0.0/0 -> ext.GatewayIP) is programmed via Infra.spec.staticRoutes above.
+	// Applying a legacy F5SPKStaticRoute when USE_GATEWAY_SETTINGS=true triggers a nil
+	// pointer panic in f5-cne-controller's validation webhook (getStaticrouteList).
 	return []byte(netCombined), egressBytes, nil
 }
 

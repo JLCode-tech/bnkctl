@@ -417,7 +417,7 @@ func (p *Provider) attachHooks(u *provider.UnderlayContext, cl *intent.Cluster, 
 		if err != nil {
 			return nil
 		}
-		extIfName := "ens6"
+		extIfName := "ens8"
 		extPCI := ""
 		intIfName := "ens7"
 		intPCI := ""
@@ -486,6 +486,13 @@ func (p *Provider) attachHooks(u *provider.UnderlayContext, cl *intent.Cluster, 
 		if dryRun || k8sClient == nil {
 			return nil
 		}
+		if cm, err := k8sClient.CoreV1().ConfigMaps(bnkconst.InstanceNamespace).Get(ctx, "tmm-init", metav1.GetOptions{}); err == nil && cm != nil {
+			if cm.Data == nil {
+				cm.Data = make(map[string]string)
+			}
+			cm.Data["user_conf.tcl"] = "bigdb tm.tcpsegmentationoffload disable\nbigdb tm.tcplargereceiveoffload disable\npool pool1 {\n}\n"
+			_, _ = k8sClient.CoreV1().ConfigMaps(bnkconst.InstanceNamespace).Update(ctx, cm, metav1.UpdateOptions{})
+		}
 		pods, err := k8sClient.CoreV1().Pods(bnkconst.InstanceNamespace).List(ctx, metav1.ListOptions{
 			LabelSelector: "app=f5-tmm",
 		})
@@ -543,7 +550,7 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 	extPCI := st.Get("EXTERNAL_PCI")
 	extIf := st.Get("EXTERNAL_IFNAME")
 	if extIf == "" {
-		extIf = "ens6"
+		extIf = "ens8"
 	}
 	intPCI := st.Get("INTERNAL_PCI")
 	intIf := st.Get("INTERNAL_IFNAME")

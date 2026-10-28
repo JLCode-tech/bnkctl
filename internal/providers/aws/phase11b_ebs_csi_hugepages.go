@@ -138,20 +138,20 @@ func waitForInstanceRefresh(ctx context.Context, c *Clients, asgName, refreshID 
 }
 
 func ensureHugepagesDaemonSetAndRollingRefresh(ctx context.Context, cl *intent.Cluster, c *Clients) error {
-	ok, err := nodesHaveAllocatableHugepages2Mi(ctx, c, cl.TotalDesiredNodes())
-	if err != nil {
-		return err
-	}
-	if ok {
-		return nil
-	}
-
 	raw, err := manifests.FS.ReadFile("shared/hugepages-ds.yaml")
 	if err != nil {
 		return fmt.Errorf("reading embedded shared/hugepages-ds.yaml: %w", err)
 	}
 	if err := applyRawYAML(ctx, c, raw, "kube-system"); err != nil {
 		return fmt.Errorf("applying hugepages-init DaemonSet: %w", err)
+	}
+
+	ok, err := nodesHaveAllocatableHugepages2Mi(ctx, c, cl.TotalDesiredNodes())
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
 	}
 
 	if c.AutoScaling == nil || c.PhaseEKS == nil {

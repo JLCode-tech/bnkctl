@@ -100,8 +100,110 @@ spec:
       destinations:
         - {{ .VpcCidr }}
       nextHop: {{ .TunnelGateway }}
+{{- if and .HasInternal .ServiceCIDR }}
+    - name: service-cidr
+      destinations:
+        - {{ .ServiceCIDR }}
+      nextHop: {{ .TunnelGateway }}
+{{- end }}
+{{- if and .HasInternal (or .PodSubnetA .PodSubnetB) }}
+    - name: pod-cidr
+      destinations:
+{{- if .PodSubnetA }}
+        - {{ .PodSubnetA }}
+{{- end }}
+{{- if .PodSubnetB }}
+        - {{ .PodSubnetB }}
+{{- end }}
+      nextHop: {{ .TunnelGateway }}
+{{- end }}
     - name: {{ .RouteDefault }}
       destinations:
         - 0.0.0.0/0
       nextHop: {{ .ExtGateway }}
 {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tmm-init
+  namespace: {{ .InstanceNS }}
+data:
+  tmm_init.tcl: |
+    set_from_env  POD_IP  POD_IP  [info hostname]
+
+        profile tcp nagledisable {
+          default_name tcp
+          nagle disable
+        }
+
+        profile tcp dia-tcp {
+          default_name tcp
+        }
+
+        profile sctp dia-sctp {
+          default_name sctp
+        }
+
+        profile http http_socket {
+          default_name http
+        }
+
+        pool pool1 {
+
+        }
+
+        snatpool overlay_pool {
+
+        }
+
+        file_reload {
+          file_name /opt/lib/tmm/user_conf.tcl
+          interval 1
+        }
+
+        profile genericmsg gm_proto_for_gtp {
+          app-service none
+          disable-parser yes
+          message-terminator none
+          no-response yes
+          description none
+          max-egress-buffer 32768
+          max-message-size 32768
+        }
+
+        profile messagerouter gm_router_for_gtp {
+          name "gm_router_for_gtp"
+          app-service none
+          irule-scope-message no
+        }
+
+    	bigdb tm.tcpsegmentationoffload disable
+
+    	bigdb tm.tcpwoodsidefasterrecovery disable
+
+    	bigdb tm.tcplargereceiveoffload disable
+
+        pool blobd_pool {
+          member 169.254.0.253 9222
+        }
+
+        profile tcp blobd_tcp {
+          default_name tcp
+        }
+
+        # Virtual for blobd
+        virtual $POD_IP 9222 {
+          name blobd_virtual
+          profile blobd_tcp
+          vlan enable all
+          snat_automap
+          pool blobd_pool
+          auto_lasthop off
+        }
+  user_conf.tcl: |
+    bigdb tm.tcpsegmentationoffload disable
+    bigdb tm.tcplargereceiveoffload disable
+    pool pool1 {
+    }
+

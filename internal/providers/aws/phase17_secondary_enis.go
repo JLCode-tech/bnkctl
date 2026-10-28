@@ -267,6 +267,10 @@ func recordPrimaryENIMAC(ctx context.Context, c *Clients, st *state.State, insta
 					}
 					if ni.NetworkInterfaceId != nil {
 						st.Set("PRIMARY_ENI_ID", *ni.NetworkInterfaceId)
+						_, _ = c.PhaseEC2.ModifyNetworkInterfaceAttribute(ctx, &ec2.ModifyNetworkInterfaceAttributeInput{
+							NetworkInterfaceId: ni.NetworkInterfaceId,
+							SourceDestCheck:    &ec2types.AttributeBooleanValue{Value: aws.Bool(false)},
+						})
 					}
 					return st.Save()
 				}
@@ -392,6 +396,16 @@ func Phase17SecondaryENIs(ctx context.Context, cl *intent.Cluster, st *state.Sta
 		if pubRT := st.Get("PUBLIC_RT_ID"); pubRT != "" && extENIID != "" {
 			if err := replaceOrCreateENIRoute(ctx, c, pubRT, "192.168.0.0/16", extENIID); err != nil {
 				return fmt.Errorf("phase 17 secondary enis: route 192.168.0.0/16 -> %s on %s: %w", extENIID, pubRT, err)
+			}
+		}
+	}
+
+	if primaryENIID := st.Get("PRIMARY_ENI_ID"); primaryENIID != "" {
+		for _, rtKey := range []string{"BNK_EXT_RT_ID", "BNK_INT_RT_ID"} {
+			if rtID := st.Get(rtKey); rtID != "" {
+				if err := replaceOrCreateENIRoute(ctx, c, rtID, "172.20.0.0/16", primaryENIID); err != nil {
+					return fmt.Errorf("phase 17 secondary enis: route 172.20.0.0/16 -> %s on %s: %w", primaryENIID, rtID, err)
+				}
 			}
 		}
 	}

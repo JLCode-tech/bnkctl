@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/JLCode-tech/bnkctl/internal/providers/aws/awsmw"
@@ -154,7 +155,30 @@ func Phase03Subnets(ctx context.Context, cl *intent.Cluster, st *state.State, c 
 	return nil
 }
 
-// Phase03SubnetsDown deletes all subnets recorded in state in reverse order.
+// sweepAvailableSubnetENIs deletes any unattached ("available") ENIs in subnetID.
+func sweepAvailableSubnetENIs(ctx context.Context, ec2c PhaseEC2API, subnetID string) {
+	if ec2c == nil || subnetID == "" {
+		return
+	}
+	out, err := ec2c.DescribeNetworkInterfaces(ctx, &ec2.DescribeNetworkInterfacesInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("subnet-id"), Values: []string{subnetID}},
+		},
+	})
+	if err != nil || out == nil {
+		return
+	}
+	for _, eni := range out.NetworkInterfaces {
+		if eni.NetworkInterfaceId == nil || eni.Status != ec2types.NetworkInterfaceStatusAvailable {
+			continue
+		}
+		_, _ = ec2c.DeleteNetworkInterface(ctx, &ec2.DeleteNetworkInterfaceInput{
+			NetworkInterfaceId: eni.NetworkInterfaceId,
+		})
+	}
+}
+
+// Phase03SubnetsDown deletes all subnets recorded in state and any remaining tagged/VPC subnets.
 func Phase03SubnetsDown(ctx context.Context, cl *intent.Cluster, st *state.State, c *Clients, dryRun bool) error {
 	if cl == nil {
 		return fmt.Errorf("phase 03 subnets down: cluster intent is nil")
@@ -170,7 +194,7 @@ func Phase03SubnetsDown(ctx context.Context, cl *intent.Cluster, st *state.State
 	}
 
 	var keys []string
-	keys = append(keys, "BNK_INT_SUBNET", "BNK_EXT_SUBNET")
+	keys = append(keys, "BNK_INT_SUBNET", "BNK_EXT_SUBNET", "SUBNET_INT_ID", "SUBNET_EXT_ID")
 	for i := len(cl.Network.Subnets.PrivateList) - 1; i >= 0; i-- {
 		keys = append(keys, subnetStateKey("PRIVATE_SUBNET", i))
 	}
@@ -181,12 +205,24 @@ func Phase03SubnetsDown(ctx context.Context, cl *intent.Cluster, st *state.State
 	deleted := map[string]bool{}
 	deleteSubnetByID := func(id, source string) error {
 		id = strings.TrimSpace(id)
-		if id == "" || deleted[id] {
+		if id == "" || strings.HasPrefix(id, "dry-run-") || deleted[id] {
 			return nil
 		}
+		sweepAvailableSubnetENIs(ctx, c.PhaseEC2, id)
 		_, err := c.PhaseEC2.DeleteSubnet(ctx, &ec2.DeleteSubnetInput{
 			SubnetId: aws.String(id),
 		})
+		if err != nil && awsmw.IsDependencyViolation(err) {
+			sweepAvailableSubnetENIs(ctx, c.PhaseEC2, id)
+			_, err = c.PhaseEC2.DeleteSubnet(ctx, &ec2.DeleteSubnetInput{
+				SubnetId: aws.String(id),
+			})
+			if err != nil && awsmw.IsDependencyViolation(err) {
+				fmt.Fprintf(os.Stderr, "phase 03 subnets down: warning: subnet %s (%s) still has dependencies (%v); deferring to VPC blocker sweep\n", id, source, err)
+				deleted[id] = true
+				return nil
+			}
+		}
 		if err != nil && !awsmw.IsNotFound(err) {
 			return fmt.Errorf("phase 03 subnets down: DeleteSubnet %s (%s): %w", id, source, err)
 		}
@@ -213,6 +249,20 @@ func Phase03SubnetsDown(ctx context.Context, cl *intent.Cluster, st *state.State
 				}
 			}
 			st.Delete(listKey)
+		}
+	}
+
+	if cl.Metadata.Name != "" {
+		if subOut, serr := c.PhaseEC2.DescribeSubnets(ctx, &ec2.DescribeSubnetsInput{
+			Filters: []ec2types.Filter{tags.ClusterFilter(cl.Metadata.Name)},
+		}); serr == nil && subOut != nil {
+			for _, s := range subOut.Subnets {
+				if s.SubnetId != nil {
+					if err := deleteSubnetByID(*s.SubnetId, "tag-discovery"); err != nil {
+						return err
+					}
+				}
+			}
 		}
 	}
 

@@ -10,6 +10,22 @@
 # infrastructure.parametersRef. Without it the controller programs nothing.
 # The static VIP must sit inside the Infra listener pool (.100-.199); .150 is
 # the slot reserved for this demo in docs/SCENARIOS.md.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: bnk-agentcore-demo-gatewayclass
+spec:
+  controllerName: f5.com/f5-cne-system-f5-cne-controller
+  description: F5 BIG-IP Kubernetes Gateway
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: mcp-selfsigned-issuer
+  namespace: default
+spec:
+  selfSigned: {}
+---
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -23,8 +39,8 @@ spec:
   dnsNames:
   - bnk-ingress.bnk-demo.internal
   issuerRef:
-    name: bnk-agentcore-demo-ca-cluster-issuer
-    kind: ClusterIssuer
+    name: mcp-selfsigned-issuer
+    kind: Issuer
     group: cert-manager.io
 ---
 apiVersion: gateway.k8s.f5.com/v1alpha1
@@ -102,6 +118,9 @@ spec:
     - path:
         type: PathPrefix
         value: /v1/mcp/forecast
+    - path:
+        type: PathPrefix
+        value: /v1/mcp/fx
     filters:
     - type: URLRewrite
       urlRewrite:
@@ -111,6 +130,7 @@ spec:
     backendRefs:
     - name: mcp-financial-tool
       port: 80
+      weight: 1
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -130,59 +150,4 @@ spec:
     backendRefs:
     - name: mcp-financial-tool
       port: 80
----
-# Dedicated Model-Aware AI Completion Gateway:
-# Attaches F5 BNK token counting specifically to LLM completion workloads,
-# metering tokens and tracking costs without interfering with MCP JSON-RPC endpoints.
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: bnk-ai-completion-gateway
-  namespace: default
-  annotations:
-    k8s.f5.com/ai-token-counting: "true"
-spec:
-  gatewayClassName: bnk-agentcore-demo-gatewayclass
-  infrastructure:
-    parametersRef:
-      group: gateway.k8s.f5.com
-      kind: GatewaySettings
-      name: bnk-agentcore-demo
-  listeners:
-  - name: https-ai
-    protocol: HTTPS
-    port: 8443
-    tls:
-      certificateRefs:
-      - kind: Secret
-        group: ""
-        name: mcp-tls
-        namespace: default
-    allowedRoutes:
-      namespaces:
-        from: All
-      kinds:
-      - kind: HTTPRoute
-  addresses:
-  - type: IPAddress
-    value: 10.0.10.150
----
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: ai-completion-route
-  namespace: default
-spec:
-  parentRefs:
-  - name: bnk-ai-completion-gateway
-  hostnames:
-  - "bnk-ingress.bnk-demo.internal"
-  rules:
-  - matches:
-    - path:
-        type: PathPrefix
-        value: /v1/chat/completions
-    backendRefs:
-    - name: mcp-bedrock-proxy
-      port: 8080
-
+      weight: 1

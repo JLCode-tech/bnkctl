@@ -278,8 +278,12 @@ spec:
       name: llm-chat-route
 ---
 # ------------------------------------------------------------------------------
-# Step 5: TMM DNS Resolver in f5-cne-system (F5BigDnsCache/aigw-dns-resolver)
-# Forwards root zone ("") queries to cluster DNS and 8.8.8.8 / 1.1.1.1
+# Step 5: TMM Egress, Internal Routes & DNS in f5-cne-system
+#   - Infra/infra staticRoutes (provisioned by awsbnkctl) program TMM ZebOS/kernel FIB routes for:
+#     * 0.0.0.0/0 -> 10.0.10.1 (external NAT GW for AWS Bedrock egress)
+#     * 172.20.0.0/16 -> 10.0.20.1 (Kubernetes Service CIDR via internal subnet GW)
+#     * 10.0.11.0/24 & 10.0.12.0/24 -> 10.0.20.1 (Pod CIDRs across AZs)
+#   - F5BigDnsCache/aigw-dns-resolver forwards root zone (".") queries
 # ------------------------------------------------------------------------------
 apiVersion: k8s.f5net.com/v1
 kind: F5BigDnsCache
@@ -296,10 +300,9 @@ spec:
     forwardZones:
       - forwardZone: "."
         nameServers:
-          - ipAddress: 10.100.0.10
+          - ipAddress: 172.20.0.10
             port: 53
           - ipAddress: 8.8.8.8
             port: 53
           - ipAddress: 1.1.1.1
             port: 53
-

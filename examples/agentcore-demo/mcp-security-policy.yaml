@@ -105,6 +105,8 @@ spec:
         set static::mcp_privileged_tools [list "get_account_balance"]
         set static::mcp_privileged_token "demo-agent-token-a7f3c1"
         set static::mcp_external_token "demo-external-token-4b9e2d"
+        set static::mcp_max_reqs 30
+        array set static::mcp_rl {}
     }
     when HTTP_REQUEST {
         set gov_t0 [clock clicks -milliseconds]
@@ -136,25 +138,39 @@ spec:
 
         set gov_mcp 0
         if { [HTTP::path] starts_with "/v1/mcp/forecast" } { set gov_mcp 1 }
+        if { [HTTP::path] starts_with "/v1/mcp/fx" } { set gov_mcp 1 }
         if { [HTTP::path] equals "/" } { set gov_mcp 1 }
         if { $gov_mcp == 0 } { return }
 
         set cur_window [expr {[clock seconds] / 60}]
         set win_key "${gov_key}:${cur_window}"
         set gov_count 1
-        set cur [table lookup -subtable "mcp_rl" $win_key]
-        if { $cur eq "" } {
-            table set -subtable "mcp_rl" $win_key 1 120 120
-            set gov_count 1
-        } else {
-            set gov_count [expr {$cur + 1}]
-            table set -subtable "mcp_rl" $win_key $gov_count 120 120
+        if { [catch {
+            set cur [table lookup -subtable "mcp_rl" $win_key]
+            if { $cur eq "" } {
+                table set -subtable "mcp_rl" $win_key 1 120 120
+                set gov_count 1
+            } else {
+                set gov_count [expr {$cur + 1}]
+                table set -subtable "mcp_rl" $win_key $gov_count 120 120
+            }
+        }] } {
+            if { [info exists static::mcp_rl($win_key)] } {
+                incr static::mcp_rl($win_key)
+                set gov_count $static::mcp_rl($win_key)
+            } else {
+                if { [array size static::mcp_rl] > 256 } {
+                    array unset static::mcp_rl
+                }
+                set static::mcp_rl($win_key) 1
+                set gov_count 1
+            }
         }
 
-        if { $gov_count > 10 } {
+        if { $gov_count > $static::mcp_max_reqs } {
             log local0. "BNKGOV {\"job\":\"llm-gateway\",\"model\":\"mcp:finance-tool\",\"status\":\"429\",\"latency_ms\":0,\"prompt_tk\":0,\"comp_tk\":0,\"total_tk\":0,\"cached\":0,\"cost\":0,\"userq\":\"$gov_uri\",\"client\":\"$gov_client\",\"caller\":\"$gov_caller\",\"action\":\"rate_limited\",\"req_body\":\"\",\"resp_body\":\"rate limit exceeded\",\"rpc_method\":\"$gov_method\",\"tool\":\"$gov_tool\",\"session\":\"$gov_session\",\"transport\":\"$gov_transport\"}"
             HTTP::respond 429 \
-                content "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32000,\"message\":\"rate limit exceeded: 10 requests per 60s per caller\"}}" \
+                content "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32000,\"message\":\"rate limit exceeded: 30 requests per 60s per caller\"}}" \
                 "Content-Type" "application/json" \
                 "Retry-After" "60"
             return
@@ -168,6 +184,8 @@ spec:
         }
     }
     when HTTP_REQUEST_DATA {
+        set gov_method ""
+        set gov_tool ""
         set gov_req [string map {\\ \\\\ \" \\\" \n {} \r {} \t { }} [HTTP::payload]]
         if { [string length $gov_req] > 280 } {
             set gov_req [string range $gov_req 0 279]
@@ -223,11 +241,12 @@ spec:
         HTTP::release
     }
 ---
-# One NetPolicy per listener, carrying the governance iRule and the
-# MODEL_CONTEXT_PROTOCOL persistence profile from mcp-persistence.yaml (a
-# NetPolicy holds at most one persistence profile, and a listener must not be
-# targeted by two NetPolicies). Two reasons this is listener-scoped
-# (`sectionName`) rather than Gateway-scoped:
+# One NetPolicy per listener, carrying the governance iRule.
+# Note: F5BigPersistenceProfile/mcp-session (MODEL_CONTEXT_PROTOCOL) is NOT
+# attached here because its auto-generated iRule (`persist uie $key 60` in
+# HTTP_REQUEST_DATA) throws TCL error `Prerequisite operation not in progress`
+# on BNK 2.4.1 and aborts the connection.
+# Two reasons this is listener-scoped (`sectionName`) rather than Gateway-scoped:
 #
 #   1. BNK Forge's Gateway Topology view only renders iRule attachments under a
 #      listener. A NetPolicy with no `sectionName` attaches and works, but is
@@ -253,9 +272,6 @@ spec:
   - group: k8s.f5net.com
     kind: F5BigCneIrule
     name: mcp-rate-limit-irule
-  - group: k8s.f5net.com
-    kind: F5BigPersistenceProfile
-    name: mcp-session
 ---
 apiVersion: gateway.k8s.f5.com/v1alpha1
 kind: NetPolicy
@@ -272,9 +288,6 @@ spec:
   - group: k8s.f5net.com
     kind: F5BigCneIrule
     name: mcp-rate-limit-irule
-  - group: k8s.f5net.com
-    kind: F5BigPersistenceProfile
-    name: mcp-session
 ---
 # L4 firewall attached to the Gateway, rendered in Forge under the Gateway.
 # Scoped rather than allow-all so "default deny plus explicit allow" is

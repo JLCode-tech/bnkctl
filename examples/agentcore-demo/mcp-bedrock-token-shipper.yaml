@@ -1,0 +1,384 @@
+# Bedrock model-invocation token shipper.
+#
+#   AgentCore runtime ──model call──► Amazon Bedrock
+#                                         │
+#                              model invocation logging
+#                                         ▼
+#                        CloudWatch  /aws/bedrock/modelinvocations
+#                                         │  FilterLogEvents (IRSA)
+#                                         ▼
+#                              bedrock-token-shipper
+#                                         │  push, job="llm-gateway"
+#                                         ▼
+#                              loki.llm-egress:3100
+#
+# This closes the gap left by mcp-security-policy.yaml: BNK is in-path for the
+# agent-to-tool hop and reports allow/rate_limited decisions with zero tokens;
+# Bedrock is in-path for the model call and reports the real token counts.
+# Both land in the same Loki stream so Forge shows one picture.
+#
+# PREREQUISITES (one-time, outside Kubernetes — see README section 6):
+#
+#   1. Log group + a role Bedrock can assume to write to it:
+#        aws logs create-log-group --log-group-name /aws/bedrock/modelinvocations
+#        # role trusting bedrock.amazonaws.com with logs:CreateLogStream,
+#        # logs:PutLogEvents, logs:DescribeLogStreams on that group
+#        aws bedrock put-model-invocation-logging-configuration --logging-config '{...}'
+#
+#   2. An IRSA role for this pod with logs:FilterLogEvents on that group,
+#      trusting system:serviceaccount:llm-egress:bedrock-token-shipper.
+#      Put its ARN in the ServiceAccount annotation below.
+#
+# Apply with:
+#   KUBECONFIG=.awsbnkctl/bnk-agentcore-demo/kubeconfig \
+#     kubectl apply -f mcp-bedrock-token-shipper.yaml
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bedrock-token-shipper
+  namespace: llm-egress
+  annotations:
+    # REQUIRED: replace <account-id> with your AWS account. Without a valid
+    # IRSA role ARN the pod starts but every FilterLogEvents call is denied.
+    eks.amazonaws.com/role-arn: arn:aws:iam::<account-id>:role/BNKDemoBedrockTokenShipper
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bedrock-token-shipper-code
+  namespace: llm-egress
+data:
+  shipper.py: |
+    #!/usr/bin/env python3
+    """Ship Bedrock model-invocation token counts into Loki.
+
+    Polls the Bedrock invocation log group and rewrites each record into the
+    schema BNK Forge's LLM Observability panel reads, so the model leg and the
+    BNK-governed tool leg appear in one place.
+    """
+    import json
+    import os
+    import threading
+    import time
+    import urllib.error
+    import urllib.request
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+
+    PORT = int(os.environ.get("PORT", "9090"))
+    LOG_GROUP = os.environ.get("LOG_GROUP", "/aws/bedrock/modelinvocations")
+    LOKI_URL = os.environ.get(
+        "LOKI_URL", "http://loki:3100/loki/api/v1/push"
+    )
+    REGION = os.environ.get("AWS_REGION", "ap-southeast-2")
+    INTERVAL = float(os.environ.get("INTERVAL", "20"))
+    LOOKBACK_S = int(os.environ.get("LOOKBACK_S", "300"))
+
+    # Bedrock is partner-operated and priced separately from Anthropic's
+    # first-party API. These defaults are Anthropic's published list rate for
+    # Sonnet 4.6 ($3 / $15 per 1M tokens) and are almost certainly NOT your
+    # negotiated Bedrock rate. Check https://aws.amazon.com/bedrock/pricing/
+    # and override via env. Set both to 0 to leave cost out of the picture.
+    PRICE_IN_PER_1K = float(os.environ.get("PRICE_IN_PER_1K", "0.003"))
+    PRICE_OUT_PER_1K = float(os.environ.get("PRICE_OUT_PER_1K", "0.015"))
+
+    # Bedrock invocation records embed the full prompt and completion. They are
+    # what fills Forge's raw request/response pane, but they are unbounded and
+    # can contain sensitive prompt text — cap them, and lower this (or set it
+    # to 0) if prompt content must not leave the AWS account.
+    BODY_LIMIT = int(os.environ.get("BODY_LIMIT", "4000"))
+
+    class MetricsHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            data = self.rfile.read(length)
+            try:
+                record = json.loads(data.decode("utf-8"))
+                prompt_tk = int(record.get("prompt_tk") or 0)
+                comp_tk = int(record.get("comp_tk") or 0)
+                cost = (prompt_tk / 1000.0 * PRICE_IN_PER_1K) + (comp_tk / 1000.0 * PRICE_OUT_PER_1K)
+                record["prompt_tk"] = prompt_tk
+                record["comp_tk"] = comp_tk
+                record["cost"] = round(cost, 6)
+                record["total_tk"] = prompt_tk + comp_tk
+                # Records posted here are not Bedrock invocation logs. They are
+                # labelled so a reader of the Loki stream can tell them apart.
+                record["source"] = record.get("source") or "synthetic"
+                if "timestamp" not in record:
+                    record["timestamp"] = time.time()
+                ts_ns = str(int(float(record["timestamp"]) * 1e9))
+                model = record.get("model", "claude-3-5-sonnet")
+                status = str(record.get("status", "200"))
+                stream = {
+                    "stream": {
+                        "job": "llm-gateway",
+                        "model": model,
+                        "status": status,
+                        "source": record["source"],
+                    },
+                    "values": [[ts_ns, json.dumps(record)]],
+                }
+                push([stream])
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"status":"ok"}')
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode("utf-8"))
+
+        def do_GET(self):
+            if self.path == "/healthz":
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"ok")
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, format, *args):
+            pass
+
+
+    def first_user_text(body):
+        """Best-effort one-line summary of the prompt, for the userq column."""
+        if not isinstance(body, dict):
+            return ""
+        for msg in body.get("messages") or []:
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                return content[:200]
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("text"):
+                        return str(block["text"])[:200]
+        return ""
+
+
+    def clip(obj, limit=None):
+        """Serialise a body for the Forge log detail pane, bounded in size."""
+        limit = limit or BODY_LIMIT
+        if obj is None:
+            return ""
+        if not isinstance(obj, str):
+            try:
+                obj = json.dumps(obj, separators=(",", ":"))
+            except (TypeError, ValueError):
+                obj = str(obj)
+        if len(obj) > limit:
+            return obj[:limit] + f"...[truncated, {len(obj)} bytes]"
+        return obj
+
+
+    def to_record(msg):
+        model = msg.get("modelId") or "unknown"
+        inp = msg.get("input") or {}
+        out = msg.get("output") or {}
+        prompt_tk = int(inp.get("inputTokenCount") or 0)
+        comp_tk = int(out.get("outputTokenCount") or 0)
+        cached = int(inp.get("cacheReadInputTokenCount") or 0)
+        err = msg.get("errorCode")
+        status = "200" if not err else "500"
+        cost = round(
+            (prompt_tk / 1000.0) * PRICE_IN_PER_1K
+            + (comp_tk / 1000.0) * PRICE_OUT_PER_1K,
+            8,
+        )
+        return {
+            "job": "llm-gateway",
+            "model": model,
+            "status": status,
+            "latency_ms": 0,
+            "prompt_tk": prompt_tk,
+            "comp_tk": comp_tk,
+            "total_tk": prompt_tk + comp_tk,
+            "cached": 1 if cached else 0,
+            "cost": cost,
+            "userq": first_user_text(inp.get("inputBodyJson")),
+            "client": "bedrock",
+            "action": msg.get("operation") or "InvokeModel",
+            "req_body": clip(inp.get("inputBodyJson")),
+            "resp_body": clip(out.get("outputBodyJson")),
+        }
+
+
+    def push(streams):
+        payload = json.dumps({"streams": streams}).encode()
+        req = urllib.request.Request(
+            LOKI_URL,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status in (200, 204)
+        except urllib.error.HTTPError as exc:
+            print(f"[shipper] loki {exc.code}: {exc.read().decode()[:300]}", flush=True)
+        except Exception as exc:  # noqa: BLE001 - keep the loop alive
+            print(f"[shipper] loki error: {exc}", flush=True)
+        return False
+
+
+    def cloudwatch_client():
+        # boto3 is installed in the background at container start (see the
+        # Deployment args); wait for it instead of giving up on the first
+        # ImportError. Twenty attempts, 15 s apart.
+        for attempt in range(1, 21):
+            try:
+                import boto3
+                return boto3.client("logs", region_name=REGION)
+            except Exception as exc:  # noqa: BLE001 - not installed yet, or no credentials
+                print(f"[shipper-cw] waiting for boto3 ({attempt}/20): {exc}", flush=True)
+                time.sleep(15)
+        return None
+
+
+    def poll_cloudwatch_loop():
+        logs = cloudwatch_client()
+        if logs is None:
+            print(f"[shipper-cw] boto3 unavailable; CloudWatch leg disabled, HTTP receiver active on :{PORT}", flush=True)
+            return
+        try:
+            since_ms = int((time.time() - LOOKBACK_S) * 1000)
+            seen = set()
+            print(
+                f"[shipper-cw] group={LOG_GROUP} loki={LOKI_URL} interval={INTERVAL}s",
+                flush=True,
+            )
+            while True:
+                try:
+                    streams, newest, count = [], since_ms, 0
+                    paginator = logs.get_paginator("filter_log_events")
+                    for page in paginator.paginate(
+                        logGroupName=LOG_GROUP, startTime=since_ms
+                    ):
+                        for event in page.get("events", []):
+                            raw = event.get("message", "").strip()
+                            if not raw.startswith("{"):
+                                continue
+                            try:
+                                msg = json.loads(raw)
+                            except ValueError:
+                                continue
+                            rid = msg.get("requestId")
+                            if rid and rid in seen:
+                                continue
+                            if rid:
+                                seen.add(rid)
+                            rec = to_record(msg)
+                            rec["source"] = "bedrock-logs"
+                            ts_ns = str(int(event["timestamp"]) * 1_000_000)
+                            streams.append(
+                                {
+                                    "stream": {
+                                        "job": "llm-gateway",
+                                        "model": rec["model"],
+                                        "status": rec["status"],
+                                        "source": "bedrock-logs",
+                                    },
+                                    "values": [[ts_ns, json.dumps(rec)]],
+                                }
+                            )
+                            newest = max(newest, int(event["timestamp"]))
+                            count += 1
+                    if streams and push(streams):
+                        print(f"[shipper-cw] pushed {count} record(s)", flush=True)
+                        since_ms = newest + 1
+                    if len(seen) > 20000:
+                        seen.clear()
+                except Exception as exc:  # noqa: BLE001 - keep the loop alive
+                    print(f"[shipper-cw] poll error: {exc}", flush=True)
+                    time.sleep(30)
+                time.sleep(INTERVAL)
+        except Exception as exc:  # noqa: BLE001 - never take the HTTP receiver down with the poller
+            print(f"[shipper-cw] stopped: {exc}", flush=True)
+
+
+    def main():
+        print(f"[shipper] starting HTTP receiver on port {PORT}, loki={LOKI_URL}", flush=True)
+        cw_thread = threading.Thread(target=poll_cloudwatch_loop, daemon=True)
+        cw_thread.start()
+        server = HTTPServer(("0.0.0.0", PORT), MetricsHandler)
+        server.serve_forever()
+
+
+    if __name__ == "__main__":
+        main()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bedrock-token-shipper
+  namespace: llm-egress
+  labels:
+    app.kubernetes.io/name: bedrock-token-shipper
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bedrock-token-shipper
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bedrock-token-shipper
+    spec:
+      serviceAccountName: bedrock-token-shipper
+      containers:
+      - name: shipper
+        image: python:3.11-slim
+        command:
+        - /bin/sh
+        - -c
+        args:
+        # boto3 installs in the background so the HTTP receiver is up at once;
+        # the CloudWatch poller waits for the import (cloudwatch_client).
+        - (pip install boto3 -q 2>&1 | tail -1 &) ; exec python3 /app/shipper.py
+        env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: PORT
+          value: "9090"
+        - name: AWS_REGION
+          # rebuild.sh substitutes metadata.region from cluster.yaml here; edit
+          # by hand if you apply this file directly outside ap-southeast-2.
+          value: ap-southeast-2
+        - name: LOG_GROUP
+          value: /aws/bedrock/modelinvocations
+        - name: LOKI_URL
+          value: http://loki:3100/loki/api/v1/push
+        - name: INTERVAL
+          value: "20"
+        ports:
+        - containerPort: 9090
+          name: http
+        volumeMounts:
+        - name: code
+          mountPath: /app
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+      volumes:
+      - name: code
+        configMap:
+          name: bedrock-token-shipper-code
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bedrock-token-shipper
+  namespace: llm-egress
+spec:
+  selector:
+    app.kubernetes.io/name: bedrock-token-shipper
+  ports:
+  - name: http
+    port: 9090
+    targetPort: 9090
+    protocol: TCP

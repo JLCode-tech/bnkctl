@@ -32,6 +32,14 @@ func TestRenderAllMatrix(t *testing.T) {
 						Name:   "test-" + cloud,
 						Region: "us-east-1",
 					},
+					Network: intent.Network{
+						Subnets: intent.Subnets{
+							PrivateList: []intent.SubnetSpec{
+								{CIDR: "10.0.11.0/24", AZ: "us-east-1a"},
+								{CIDR: "10.0.12.0/24", AZ: "us-east-1b"},
+							},
+						},
+					},
 					Bnk: &intent.BnkSpec{
 						ManifestVersion: ver,
 						DeploymentSize:  "Small",
@@ -115,6 +123,30 @@ func TestRenderAllMatrix(t *testing.T) {
 					}
 					if !strings.Contains(all, "USE_GATEWAY_SETTINGS") || !strings.Contains(all, "MAX_ACTIVE_TMM_REPLICAS") {
 						t.Errorf("expected USE_GATEWAY_SETTINGS and MAX_ACTIVE_TMM_REPLICAS for %s release", ver)
+					}
+					if !strings.Contains(all, "TMM_SOCAT_DISABLE") {
+						t.Errorf("expected TMM_SOCAT_DISABLE in rendered BNK %s CNEInstance", ver)
+					}
+					for _, routeEntry := range []string{"name: default", "name: service-cidr", "name: pod-cidr", "- 10.0.11.0/24", "- 10.0.12.0/24"} {
+						if !strings.Contains(all, routeEntry) {
+							t.Errorf("expected Infra staticRoutes entry %q in rendered BNK %s manifests", routeEntry, ver)
+						}
+					}
+					if strings.HasPrefix(ver, "2.4.1") || strings.HasPrefix(ver, "2.5") {
+						if !strings.Contains(all, "kind: F5BigDnsCache") || !strings.Contains(all, "name: aigw-dns-resolver") {
+							t.Errorf("expected F5BigDnsCache/aigw-dns-resolver in rendered BNK %s manifests", ver)
+						}
+					}
+					if strings.Contains(all, "availabilityZone:") {
+						t.Errorf("availabilityZone must be omitted when PLATFORM_TYPE != AWS in rendered BNK %s manifests", ver)
+					}
+					if cloud == intent.ProviderAWS {
+						if !strings.Contains(all, "name: tmm-init") || !strings.Contains(all, "bigdb tm.tcpsegmentationoffload disable") {
+							t.Errorf("expected ConfigMap/tmm-init with TSO/LRO disable for AWS in BNK %s manifests", ver)
+						}
+					}
+					if strings.Contains(all, "value: \"PCIDEVICE_INTEL_COM_") {
+						t.Errorf("ROBIN_VFIO_RESOURCE_N must use short uppercase interface name without PCIDEVICE_INTEL_COM_ prefix")
 					}
 					if !strings.Contains(all, "eppNamespaces") {
 						t.Errorf("expected eppNamespaces for %s release", ver)

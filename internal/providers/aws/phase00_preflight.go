@@ -10,13 +10,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 
+	"github.com/JLCode-tech/bnkctl/internal/providers/aws/awsmw"
+	"github.com/JLCode-tech/bnkctl/internal/providers/aws/tags"
 	"github.com/JLCode-tech/bnkctl/pkg/bnkconst"
 	"github.com/JLCode-tech/bnkctl/pkg/intent"
 	"github.com/JLCode-tech/bnkctl/pkg/k8s"
 	"github.com/JLCode-tech/bnkctl/pkg/state"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
@@ -72,6 +76,10 @@ const (
 	TMMLabelValue               = "f5-tmm"
 )
 
+// DefaultVPCQuota is the standard AWS per-region VPC limit used by preflight when
+// neither BNKCTL_VPC_QUOTA nor AWSBNKCTL_VPC_QUOTA is set.
+var DefaultVPCQuota = 5
+
 // PhaseEC2API is the full EC2 surface required by the greenfield AWS provisioning phases.
 type PhaseEC2API interface {
 	CreateVpc(ctx context.Context, params *ec2.CreateVpcInput, optFns ...func(*ec2.Options)) (*ec2.CreateVpcOutput, error)
@@ -123,6 +131,7 @@ type PhaseEC2API interface {
 	AssignPrivateIpAddresses(ctx context.Context, params *ec2.AssignPrivateIpAddressesInput, optFns ...func(*ec2.Options)) (*ec2.AssignPrivateIpAddressesOutput, error)
 
 	DescribeInstances(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
+	ModifyInstanceMetadataOptions(ctx context.Context, params *ec2.ModifyInstanceMetadataOptionsInput, optFns ...func(*ec2.Options)) (*ec2.ModifyInstanceMetadataOptionsOutput, error)
 	DescribeImages(ctx context.Context, params *ec2.DescribeImagesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeImagesOutput, error)
 	RunInstances(ctx context.Context, params *ec2.RunInstancesInput, optFns ...func(*ec2.Options)) (*ec2.RunInstancesOutput, error)
 	TerminateInstances(ctx context.Context, params *ec2.TerminateInstancesInput, optFns ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error)
@@ -487,6 +496,83 @@ func (v *AuthValidator) Validate(ctx context.Context) (*CallerIdentity, error) {
 	}, nil
 }
 
+// checkVPCQuota fails fast when the region is already at or above its VPC limit
+// and no existing VPC for this cluster can be reused.
+func checkVPCQuota(ctx context.Context, cl *intent.Cluster, st *state.State, c *Clients) error {
+	if c == nil || c.PhaseEC2 == nil {
+		return nil
+	}
+	quota := DefaultVPCQuota
+	for _, envKey := range []string{"BNKCTL_VPC_QUOTA", "AWSBNKCTL_VPC_QUOTA"} {
+		if raw := strings.TrimSpace(os.Getenv(envKey)); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+				quota = n
+				break
+			}
+		}
+	}
+
+	if st != nil {
+		if existingID := st.Get("VPC_ID"); existingID != "" && existingID != "dry-run-vpc" {
+			out, err := c.PhaseEC2.DescribeVpcs(ctx, &ec2.DescribeVpcsInput{
+				VpcIds: []string{existingID},
+			})
+			if err == nil && len(out.Vpcs) > 0 {
+				return nil
+			}
+			if err != nil && !awsmw.IsNotFound(err) {
+				return fmt.Errorf("phase 00 preflight: describing VPC %s: %w", existingID, err)
+			}
+		}
+	}
+
+	out, err := c.PhaseEC2.DescribeVpcs(ctx, &ec2.DescribeVpcsInput{})
+	if err != nil {
+		return fmt.Errorf("phase 00 preflight: listing VPCs for quota check: %w", err)
+	}
+
+	for _, v := range out.Vpcs {
+		for _, t := range v.Tags {
+			if (aws.ToString(t.Key) == tags.KeyCluster || aws.ToString(t.Key) == "bnk.f5.com/cluster") &&
+				aws.ToString(t.Value) == cl.Metadata.Name {
+				return nil
+			}
+		}
+	}
+
+	if len(out.Vpcs) >= quota {
+		var summaries []string
+		for _, v := range out.Vpcs {
+			id := aws.ToString(v.VpcId)
+			var name, clusterTag string
+			for _, t := range v.Tags {
+				switch aws.ToString(t.Key) {
+				case "Name":
+					name = aws.ToString(t.Value)
+				case tags.KeyCluster, "bnk.f5.com/cluster":
+					clusterTag = aws.ToString(t.Value)
+				}
+			}
+			label := id
+			if name != "" {
+				label += fmt.Sprintf(" (%s)", name)
+			}
+			if clusterTag != "" {
+				label += fmt.Sprintf(" [cluster=%s]", clusterTag)
+			}
+			summaries = append(summaries, label)
+		}
+		return fmt.Errorf(
+			"phase 00 preflight: region %s has %d VPCs (quota limit %d; existing: %s); tear down unused clusters with 'bnkctl down -f <intent.yaml>' or set BNKCTL_VPC_QUOTA=<limit> if your account has a raised limit",
+			cl.Metadata.Region,
+			len(out.Vpcs),
+			quota,
+			strings.Join(summaries, ", "),
+		)
+	}
+	return nil
+}
+
 // Phase00Preflight runs pre-flight checks before any AWS resources are created.
 func Phase00Preflight(ctx context.Context, cl *intent.Cluster, st *state.State, c *Clients, dryRun bool) error {
 	return Phase00PreflightWithLookPath(ctx, cl, st, c, dryRun, exec.LookPath)
@@ -524,6 +610,10 @@ func Phase00PreflightWithLookPath(ctx context.Context, cl *intent.Cluster, st *s
 	if st != nil && id != nil {
 		st.Set("AWS_ACCOUNT_ID", id.Account)
 		st.Set("AWS_CALLER_ARN", id.ARN)
+	}
+
+	if err := checkVPCQuota(ctx, cl, st, c); err != nil {
+		return err
 	}
 
 	if cl.Bnk != nil {
