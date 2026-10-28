@@ -33,7 +33,6 @@ echo "Discovering VPC ID for cluster $CLUSTER_NAME..."
 VPC_ID=$(aws ec2 describe-vpcs \
     --filters \
         "Name=tag:awsbnkctl:cluster,Values=${CLUSTER_NAME}" \
-        "Name=tag:awsbnkctl:component,Values=vpc" \
     --query "Vpcs[0].VpcId" --output text)
 if [ "$VPC_ID" == "None" ] || [ -z "$VPC_ID" ]; then
     echo "Could not find VPC for cluster $CLUSTER_NAME"
@@ -66,7 +65,15 @@ AGENT_SUBNETS_JSON=$(aws ec2 describe-subnets \
         "Name=tag:awsbnkctl:component,Values=subnet-private" \
     --query 'sort_by(Subnets, &AvailabilityZone)[].SubnetId' --output json | jq -c .)
 if [ "$AGENT_SUBNETS_JSON" == "[]" ] || [ -z "$AGENT_SUBNETS_JSON" ]; then
-    echo "Could not find private subnets tagged awsbnkctl:component=subnet-private"
+    AGENT_SUBNETS_JSON=$(aws ec2 describe-subnets \
+        --filters \
+            "Name=vpc-id,Values=$VPC_ID" \
+            "Name=tag:awsbnkctl:cluster,Values=$CLUSTER_NAME" \
+            "Name=tag:kubernetes.io/role/internal-elb,Values=1" \
+        --query 'sort_by(Subnets, &AvailabilityZone)[].SubnetId' --output json | jq -c .)
+fi
+if [ "$AGENT_SUBNETS_JSON" == "[]" ] || [ -z "$AGENT_SUBNETS_JSON" ]; then
+    echo "Could not find private subnets for cluster $CLUSTER_NAME"
     exit 1
 fi
 echo "Found private subnets: $AGENT_SUBNETS_JSON"
@@ -99,8 +106,8 @@ fi
 echo "Attaching AmazonSSMManagedInstanceCore to ${CLUSTER_NAME}-jumphost-role (demo.sh runs over SSM)..."
 aws iam attach-role-policy \
     --role-name "${CLUSTER_NAME}-jumphost-role" \
-    --policy-arn "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore" \
-    || { echo "ERROR: could not attach the SSM policy; demo.sh will not reach the jumphost" >&2; exit 1; }
+    --policy-arn "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore" 2>/dev/null \
+    || echo "Warning: ${CLUSTER_NAME}-jumphost-role not present (skipping SSM policy attach)"
 
 echo "Authorizing ingress from VPC CIDR ($VPC_CIDR) to Agent SG ($AGENT_SG_ID) on port 8080..."
 aws ec2 authorize-security-group-ingress \
@@ -108,10 +115,10 @@ aws ec2 authorize-security-group-ingress \
     --protocol tcp --port 8080 --cidr "$VPC_CIDR" 2>/dev/null || echo "Ingress rules already exist."
 
 TMM_SG_NAME="${CLUSTER_NAME}-bnk-data"
-echo "Discovering TMM external ENI SG ($TMM_SG_NAME)..."
+echo "Discovering TMM external ENI SG ($TMM_SG_NAME / ${CLUSTER_NAME}-bnk-datapath-sg)..."
 TMM_SG_ID=$(aws ec2 describe-security-groups \
     --filters \
-        "Name=group-name,Values=$TMM_SG_NAME" \
+        "Name=group-name,Values=${CLUSTER_NAME}-bnk-data,${CLUSTER_NAME}-bnk-datapath-sg" \
         "Name=vpc-id,Values=$VPC_ID" \
     --query "SecurityGroups[0].GroupId" --output text || echo "None")
 
@@ -121,12 +128,227 @@ if [ "$TMM_SG_ID" == "None" ] || [ -z "$TMM_SG_ID" ]; then
 fi
 echo "Found TMM SG: $TMM_SG_ID"
 
-echo "Authorizing ingress from Agent SG ($AGENT_SG_ID) to TMM SG ($TMM_SG_ID)..."
+echo "Authorizing ingress from Agent SG ($AGENT_SG_ID) and VPC CIDR ($VPC_CIDR) to TMM SG ($TMM_SG_ID)..."
 aws ec2 authorize-security-group-ingress \
     --group-id "$TMM_SG_ID" \
     --ip-permissions \
     "IpProtocol=tcp,FromPort=80,ToPort=80,UserIdGroupPairs=[{GroupId=$AGENT_SG_ID,Description=agentcore-to-bnk-vip-http}]" \
-    "IpProtocol=tcp,FromPort=443,ToPort=443,UserIdGroupPairs=[{GroupId=$AGENT_SG_ID,Description=agentcore-to-bnk-vip-https}]" 2>/dev/null || echo "Ingress rules already exist."
+    "IpProtocol=tcp,FromPort=443,ToPort=443,UserIdGroupPairs=[{GroupId=$AGENT_SG_ID,Description=agentcore-to-bnk-vip-https}]" \
+    "IpProtocol=-1,IpRanges=[{CidrIp=$VPC_CIDR,Description=vpc-internal-to-bnk-tmm}]" 2>/dev/null || echo "Ingress rules already exist."
+
+AIGW_VIP="${AIGW_VIP:-10.0.10.151}"
+SERVICE_CIDR="${SERVICE_CIDR:-172.20.0.0/16}"
+BNK_NS="${BNK_NS:-f5-cne-system}"
+
+echo "Discovering BNK worker node and ENIs in VPC $VPC_ID..."
+BNK_INSTANCE_ID=$(aws ec2 describe-instances \
+    --filters \
+        "Name=vpc-id,Values=$VPC_ID" \
+        "Name=instance-state-name,Values=running" \
+    --query "Reservations[].Instances[?length(NetworkInterfaces) >= \`3\`][].InstanceId | [0]" --output text 2>/dev/null || echo "None")
+
+if [ -n "$BNK_INSTANCE_ID" ] && [ "$BNK_INSTANCE_ID" != "None" ]; then
+    echo "Found BNK worker instance: $BNK_INSTANCE_ID"
+    PRIMARY_ENI_ID=$(aws ec2 describe-instances --instance-ids "$BNK_INSTANCE_ID" \
+        --query "Reservations[0].Instances[0].NetworkInterfaces[?Attachment.DeviceIndex==\`0\`].NetworkInterfaceId | [0]" --output text)
+    EXT_ENI_ID=$(aws ec2 describe-instances --instance-ids "$BNK_INSTANCE_ID" \
+        --query "Reservations[0].Instances[0].NetworkInterfaces[?starts_with(PrivateIpAddress, \`10.0.10.\`)].NetworkInterfaceId | [0]" --output text)
+    INT_ENI_ID=$(aws ec2 describe-instances --instance-ids "$BNK_INSTANCE_ID" \
+        --query "Reservations[0].Instances[0].NetworkInterfaces[?starts_with(PrivateIpAddress, \`10.0.20.\`)].NetworkInterfaceId | [0]" --output text)
+
+    for ENI_ID in "$PRIMARY_ENI_ID" "$EXT_ENI_ID" "$INT_ENI_ID"; do
+        if [ -n "$ENI_ID" ] && [ "$ENI_ID" != "None" ]; then
+            echo "Disabling SourceDestCheck on ENI $ENI_ID..."
+            aws ec2 modify-network-interface-attribute --network-interface-id "$ENI_ID" --no-source-dest-check || true
+        fi
+    done
+
+    if [ -n "$EXT_ENI_ID" ] && [ "$EXT_ENI_ID" != "None" ]; then
+        echo "Assigning secondary private VIPs ($VIP_IP, $AIGW_VIP) and SelfIPs onto external TMM ENI $EXT_ENI_ID..."
+        for IP in "$VIP_IP" "$AIGW_VIP" "10.0.10.10" "10.0.10.11" "10.0.10.12"; do
+            aws ec2 assign-private-ip-addresses \
+                --network-interface-id "$EXT_ENI_ID" \
+                --private-ip-addresses "$IP" \
+                --allow-reassignment 2>/dev/null || true
+        done
+    fi
+
+    if [ -n "$INT_ENI_ID" ] && [ "$INT_ENI_ID" != "None" ]; then
+        echo "Ensuring internal SelfIPs are assigned onto internal TMM ENI $INT_ENI_ID..."
+        for IP in "10.0.20.10" "10.0.20.11" "10.0.20.12"; do
+            aws ec2 assign-private-ip-addresses \
+                --network-interface-id "$INT_ENI_ID" \
+                --private-ip-addresses "$IP" \
+                --allow-reassignment 2>/dev/null || true
+        done
+    fi
+
+    # Program VPC route tables:
+    # 1. Private worker subnet RTBs & int-subnet RTB: /32 VIP routes -> EXT_ENI_ID
+    # 2. ext-subnet RTB: 0.0.0.0/0 -> NAT Gateway
+    # 3. ext-subnet RTB & int-subnet RTB: 172.20.0.0/16 -> PRIMARY_ENI_ID
+    NAT_GW_ID=$(aws ec2 describe-nat-gateways \
+        --filter "Name=vpc-id,Values=$VPC_ID" "Name=state,Values=available" \
+        --query "NatGateways[0].NatGatewayId" --output text 2>/dev/null || echo "None")
+    EXT_RT_ID=$(aws ec2 describe-route-tables \
+        --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:awsbnkctl:cluster,Values=$CLUSTER_NAME" "Name=tag:awsbnkctl:component,Values=rt-bnk-ext" \
+        --query "RouteTables[0].RouteTableId" --output text 2>/dev/null || echo "None")
+    if [ -z "$EXT_RT_ID" ] || [ "$EXT_RT_ID" == "None" ]; then
+        EXT_RT_ID=$(aws ec2 describe-route-tables \
+            --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:Name,Values=${CLUSTER_NAME}-bnk-ext-rt" \
+            --query "RouteTables[0].RouteTableId" --output text 2>/dev/null || echo "None")
+    fi
+    INT_RT_ID=$(aws ec2 describe-route-tables \
+        --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:awsbnkctl:cluster,Values=$CLUSTER_NAME" "Name=tag:awsbnkctl:component,Values=rt-bnk-int" \
+        --query "RouteTables[0].RouteTableId" --output text 2>/dev/null || echo "None")
+    if [ -z "$INT_RT_ID" ] || [ "$INT_RT_ID" == "None" ]; then
+        INT_RT_ID=$(aws ec2 describe-route-tables \
+            --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:Name,Values=${CLUSTER_NAME}-bnk-int-rt" \
+            --query "RouteTables[0].RouteTableId" --output text 2>/dev/null || echo "None")
+    fi
+    PRIV_RT_IDS=$(aws ec2 describe-route-tables \
+        --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:awsbnkctl:cluster,Values=$CLUSTER_NAME" "Name=tag:awsbnkctl:component,Values=rt-private" \
+        --query "RouteTables[].RouteTableId" --output text 2>/dev/null || echo "")
+    if [ -z "$PRIV_RT_IDS" ]; then
+        PRIV_RT_IDS=$(aws ec2 describe-route-tables \
+            --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:Name,Values=${CLUSTER_NAME}-private-rt" \
+            --query "RouteTables[].RouteTableId" --output text 2>/dev/null || echo "")
+    fi
+
+    if [ -n "$EXT_RT_ID" ] && [ "$EXT_RT_ID" != "None" ]; then
+        if [ -n "$NAT_GW_ID" ] && [ "$NAT_GW_ID" != "None" ]; then
+            aws ec2 replace-route --route-table-id "$EXT_RT_ID" --destination-cidr-block "0.0.0.0/0" --nat-gateway-id "$NAT_GW_ID" 2>/dev/null || \
+            aws ec2 create-route --route-table-id "$EXT_RT_ID" --destination-cidr-block "0.0.0.0/0" --nat-gateway-id "$NAT_GW_ID" 2>/dev/null || true
+        fi
+        if [ -n "$PRIMARY_ENI_ID" ] && [ "$PRIMARY_ENI_ID" != "None" ]; then
+            aws ec2 replace-route --route-table-id "$EXT_RT_ID" --destination-cidr-block "$SERVICE_CIDR" --network-interface-id "$PRIMARY_ENI_ID" 2>/dev/null || \
+            aws ec2 create-route --route-table-id "$EXT_RT_ID" --destination-cidr-block "$SERVICE_CIDR" --network-interface-id "$PRIMARY_ENI_ID" 2>/dev/null || true
+        fi
+    fi
+
+    if [ -n "$INT_RT_ID" ] && [ "$INT_RT_ID" != "None" ]; then
+        if [ -n "$PRIMARY_ENI_ID" ] && [ "$PRIMARY_ENI_ID" != "None" ]; then
+            aws ec2 replace-route --route-table-id "$INT_RT_ID" --destination-cidr-block "$SERVICE_CIDR" --network-interface-id "$PRIMARY_ENI_ID" 2>/dev/null || \
+            aws ec2 create-route --route-table-id "$INT_RT_ID" --destination-cidr-block "$SERVICE_CIDR" --network-interface-id "$PRIMARY_ENI_ID" 2>/dev/null || true
+        fi
+        if [ -n "$EXT_ENI_ID" ] && [ "$EXT_ENI_ID" != "None" ]; then
+            for VIP_CIDR in "${VIP_IP}/32" "${AIGW_VIP}/32"; do
+                aws ec2 replace-route --route-table-id "$INT_RT_ID" --destination-cidr-block "$VIP_CIDR" --network-interface-id "$EXT_ENI_ID" 2>/dev/null || \
+                aws ec2 create-route --route-table-id "$INT_RT_ID" --destination-cidr-block "$VIP_CIDR" --network-interface-id "$EXT_ENI_ID" 2>/dev/null || true
+            done
+        fi
+    fi
+
+    if [ -n "$EXT_ENI_ID" ] && [ "$EXT_ENI_ID" != "None" ]; then
+        for RT_ID in $PRIV_RT_IDS; do
+            for VIP_CIDR in "${VIP_IP}/32" "${AIGW_VIP}/32"; do
+                aws ec2 replace-route --route-table-id "$RT_ID" --destination-cidr-block "$VIP_CIDR" --network-interface-id "$EXT_ENI_ID" 2>/dev/null || \
+                aws ec2 create-route --route-table-id "$RT_ID" --destination-cidr-block "$VIP_CIDR" --network-interface-id "$EXT_ENI_ID" 2>/dev/null || true
+            done
+        done
+    fi
+
+    # Program BNK worker node link-up (ens5/ens6) and iptables Service CIDR NAT via SSM if reachable
+    aws ssm send-command \
+        --instance-ids "$BNK_INSTANCE_ID" \
+        --document-name "AWS-RunShellScript" \
+        --parameters 'commands=[
+          "ip link set ens5 up 2>/dev/null || true",
+          "ip link set ens6 up 2>/dev/null || true",
+          "sysctl -w net.ipv4.ip_forward=1",
+          "iptables -t nat -C PREROUTING -s 10.0.10.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s 10.0.10.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES",
+          "iptables -t nat -C PREROUTING -s 10.0.20.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s 10.0.20.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES",
+          "iptables -t nat -C POSTROUTING -s 10.0.10.0/24 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.0.10.0/24 -j MASQUERADE",
+          "iptables -t nat -C POSTROUTING -s 10.0.20.0/24 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.0.20.0/24 -j MASQUERADE"
+        ]' >/dev/null 2>&1 || true
+fi
+
+# Ensure TMM ENA TSO/LRO disable in ConfigMap/tmm-init in f5-cne-system
+kubectl apply -f - <<EOF 2>/dev/null || true
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tmm-init
+  namespace: ${BNK_NS}
+data:
+  tmm_init.tcl: |
+    set_from_env  POD_IP  POD_IP  [info hostname]
+
+        profile tcp nagledisable {
+          default_name tcp
+          nagle disable
+        }
+
+        profile tcp dia-tcp {
+          default_name tcp
+        }
+
+        profile sctp dia-sctp {
+          default_name sctp
+        }
+
+        profile http http_socket {
+          default_name http
+        }
+
+        pool pool1 {
+
+        }
+
+        snatpool overlay_pool {
+
+        }
+
+        file_reload {
+          file_name /opt/lib/tmm/user_conf.tcl
+          interval 1
+        }
+
+        profile genericmsg gm_proto_for_gtp {
+          app-service none
+          disable-parser yes
+          message-terminator none
+          no-response yes
+          description none
+          max-egress-buffer 32768
+          max-message-size 32768
+        }
+
+        profile messagerouter gm_router_for_gtp {
+          name "gm_router_for_gtp"
+          app-service none
+          irule-scope-message no
+        }
+
+    	bigdb tm.tcpsegmentationoffload disable
+
+    	bigdb tm.tcpwoodsidefasterrecovery disable
+
+    	bigdb tm.tcplargereceiveoffload disable
+
+        pool blobd_pool {
+          member 169.254.0.253 9222
+        }
+
+        profile tcp blobd_tcp {
+          default_name tcp
+        }
+
+        # Virtual for blobd
+        virtual \$POD_IP 9222 {
+          name blobd_virtual
+          profile blobd_tcp
+          vlan enable all
+          snat_automap
+          pool blobd_pool
+          auto_lasthop off
+        }
+  user_conf.tcl: |
+    bigdb tm.tcpsegmentationoffload disable
+    bigdb tm.tcplargereceiveoffload disable
+    pool pool1 {
+    }
+EOF
 
 echo "Checking for existing Route 53 private hosted zone $BNK_DNS_ZONE..."
 ZONE_ID=$(aws route53 list-hosted-zones-by-name \

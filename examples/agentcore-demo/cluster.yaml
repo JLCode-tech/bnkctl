@@ -58,6 +58,7 @@ bnk:
   version: "2.4.1"
   manifestVersion: "2.4.1"
   floVersion: "v2.30.0-0.11.4"
+  tmmMtu: 1500
   # bgp: open TCP 179 (BGP) + UDP 3784 (BFD) from the external subnet on the
   # data-plane security group, so TMM can peer with an AWS Route Server endpoint
   # there. Harmless with no peer. The peer and the BGP stanza (a ZebOS ConfigMap)

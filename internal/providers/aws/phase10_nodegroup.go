@@ -42,7 +42,16 @@ Content-Type: text/x-shellscript; charset="us-ascii"
 #!/bin/bash
 set -ex
 echo "vm.nr_hugepages = %d" > /etc/sysctl.d/99-bnk-hugepages.conf
+echo "fs.inotify.max_user_watches = 1048576" >> /etc/sysctl.d/99-bnk-hugepages.conf
 sysctl -p /etc/sysctl.d/99-bnk-hugepages.conf
+cat > /etc/udev/rules.d/70-bnk-ena-up.rules <<'EOF'
+ACTION=="add", SUBSYSTEM=="net", DRIVERS=="ena", RUN+="/sbin/ip link set %%k up"
+EOF
+udevadm control --reload-rules || true
+for ifname in $(ls /sys/class/net/); do
+  drv=$(basename "$(readlink -f /sys/class/net/$ifname/device/driver 2>/dev/null)" 2>/dev/null || true)
+  [ "$drv" = "ena" ] && ip link set "$ifname" up || true
+done
 
 --BOUNDARY--
 `, nrHugepages)
@@ -82,6 +91,12 @@ func ensureHugepagesLaunchTemplate(
 		return ltID, nil
 	}
 
+	diskSize := int32(50)
+	if ng.DiskSizeGiB > 0 && ng.DiskSizeGiB <= 1<<20 {
+		// #nosec G115 -- DiskSizeGiB bounded above
+		diskSize = int32(ng.DiskSizeGiB)
+	}
+
 	t := tags.Build(cl.Metadata.Name, cl.Metadata.Tags, map[string]string{
 		"Name": ltName,
 	})
@@ -89,6 +104,21 @@ func ensureHugepagesLaunchTemplate(
 		LaunchTemplateName: aws.String(ltName),
 		LaunchTemplateData: &ec2types.RequestLaunchTemplateData{
 			UserData: aws.String(hugepagesMIMEUserData(ng.Hugepages2MiCount())),
+			MetadataOptions: &ec2types.LaunchTemplateInstanceMetadataOptionsRequest{
+				HttpTokens:              ec2types.LaunchTemplateHttpTokensStateRequired,
+				HttpPutResponseHopLimit: aws.Int32(2),
+				HttpEndpoint:            ec2types.LaunchTemplateInstanceMetadataEndpointStateEnabled,
+			},
+			BlockDeviceMappings: []ec2types.LaunchTemplateBlockDeviceMappingRequest{
+				{
+					DeviceName: aws.String("/dev/xvda"),
+					Ebs: &ec2types.LaunchTemplateEbsBlockDeviceRequest{
+						VolumeType:          ec2types.VolumeTypeGp3,
+						VolumeSize:          aws.Int32(diskSize),
+						DeleteOnTermination: aws.Bool(true),
+					},
+				},
+			},
 		},
 		TagSpecifications: tags.ToTagSpec(ec2types.ResourceTypeLaunchTemplate, t),
 	})
@@ -104,6 +134,40 @@ func ensureHugepagesLaunchTemplate(
 		return "", err
 	}
 	return ltID, nil
+}
+
+func ensureClusterInstancesIMDSv2Hop2(ctx context.Context, c *Clients, clusterName string) {
+	if c == nil || c.PhaseEC2 == nil || clusterName == "" {
+		return
+	}
+	out, err := c.PhaseEC2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		Filters: []ec2types.Filter{
+			{
+				Name:   aws.String("tag:eks:cluster-name"),
+				Values: []string{clusterName},
+			},
+			{
+				Name:   aws.String("instance-state-name"),
+				Values: []string{"running"},
+			},
+		},
+	})
+	if err != nil || out == nil {
+		return
+	}
+	for _, res := range out.Reservations {
+		for _, inst := range res.Instances {
+			if inst.InstanceId == nil {
+				continue
+			}
+			_, _ = c.PhaseEC2.ModifyInstanceMetadataOptions(ctx, &ec2.ModifyInstanceMetadataOptionsInput{
+				InstanceId:              inst.InstanceId,
+				HttpTokens:              ec2types.HttpTokensStateRequired,
+				HttpPutResponseHopLimit: aws.Int32(2),
+				HttpEndpoint:            ec2types.InstanceMetadataEndpointStateEnabled,
+			})
+		}
+	}
 }
 
 func waitForNodeGroupActive(ctx context.Context, c *Clients, clusterName, ngName string) error {
@@ -356,6 +420,7 @@ func Phase10NodeGroup(ctx context.Context, cl *intent.Cluster, st *state.State, 
 		}
 	}
 
+	ensureClusterInstancesIMDSv2Hop2(ctx, c, clusterName)
 	return nil
 }
 

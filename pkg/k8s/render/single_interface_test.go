@@ -153,7 +153,12 @@ func TestRenderInfra_DualInterface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read template: %v", err)
 	}
-	out, err := RenderInfra(tmpl, infraTestCluster("10.0.10.240", "10.0.20.240"), true)
+	cl := infraTestCluster("10.0.10.240", "10.0.20.240")
+	cl.Network.Subnets.PrivateList = []intent.SubnetSpec{
+		{CIDR: "10.0.11.0/24", AZ: "ap-southeast-2a"},
+		{CIDR: "10.0.12.0/24", AZ: "ap-southeast-2b"},
+	}
+	out, err := RenderInfra(tmpl, cl, true)
 	if err != nil {
 		t.Fatalf("RenderInfra: %v", err)
 	}
@@ -161,6 +166,9 @@ func TestRenderInfra_DualInterface(t *testing.T) {
 	for _, want := range []string{`availabilityZone: "ap-southeast-2a"`, "name: int-vlan-infra", "name: int-selfip", "name: internal-netdevice", `rangeStart: "10.0.20.224"`, `rangeEnd: "10.0.20.254"`, "name: int-attach",
 		// Egress: the tunnel ends on the internal VLAN, the VPC route goes via its gateway, the default via the external one.
 		"egressDefaults:", "networkRef:\n      name: int-vlan-infra", "- 10.0.0.0/16\n      nextHop: 10.0.20.1", "- 0.0.0.0/0\n      nextHop: 10.0.10.1",
+		"name: default", "name: service-cidr", "name: pod-cidr",
+		"- 10.0.11.0/24", "- 10.0.12.0/24", "- 172.20.0.0/16",
+		"name: tmm-init", "bigdb tm.tcpsegmentationoffload disable",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("dual-interface Infra missing %q:\n%s", want, s)

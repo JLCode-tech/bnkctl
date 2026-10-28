@@ -24,13 +24,14 @@ if [ -f .agentcore-network-env.json ]; then
     BNK_INGRESS_HOST=$(jq -r '.BNK_INGRESS_HOST' .agentcore-network-env.json)
     VIP_IP=$(jq -r '.VIP_IP' .agentcore-network-env.json)
     AGENT_SG_ID=$(jq -r '.AGENT_SG_ID' .agentcore-network-env.json)
+    TMM_SG_ID=$(jq -r '.TMM_SG_ID // empty' .agentcore-network-env.json)
+    VPC_ID=$(jq -r '.VPC_ID // empty' .agentcore-network-env.json)
 else
     echo "No .agentcore-network-env.json found. Discovering resources by name..."
 
     VPC_ID=$(aws ec2 describe-vpcs \
         --filters \
             "Name=tag:awsbnkctl:cluster,Values=${CLUSTER_NAME}" \
-            "Name=tag:awsbnkctl:component,Values=vpc" \
         --query "Vpcs[0].VpcId" --output text 2>/dev/null || echo "None")
 
     if [ "$VPC_ID" != "None" ] && [ -n "$VPC_ID" ]; then
@@ -41,6 +42,11 @@ else
         AGENT_SG_ID=$(aws ec2 describe-security-groups \
             --filters \
                 "Name=group-name,Values=$AGENT_SG_NAME" \
+                "Name=vpc-id,Values=$VPC_ID" \
+            --query "SecurityGroups[0].GroupId" --output text 2>/dev/null || echo "None")
+        TMM_SG_ID=$(aws ec2 describe-security-groups \
+            --filters \
+                "Name=group-name,Values=${CLUSTER_NAME}-bnk-data,${CLUSTER_NAME}-bnk-datapath-sg" \
                 "Name=vpc-id,Values=$VPC_ID" \
             --query "SecurityGroups[0].GroupId" --output text 2>/dev/null || echo "None")
     fi
@@ -108,6 +114,15 @@ if [ -n "$AGENT_SG_ID" ] && [ "$AGENT_SG_ID" != "None" ]; then
         aws ec2 revoke-security-group-ingress \
             --group-id "$AGENT_SG_ID" \
             --protocol tcp --port 8080 --cidr "$VPC_CIDR" 2>/dev/null || echo "Ingress rule already removed or does not exist."
+    fi
+
+    if [ -n "${TMM_SG_ID:-}" ] && [ "$TMM_SG_ID" != "None" ]; then
+        echo "Revoking Agent SG ($AGENT_SG_ID) references from TMM SG ($TMM_SG_ID)..."
+        aws ec2 revoke-security-group-ingress \
+            --group-id "$TMM_SG_ID" \
+            --ip-permissions \
+            "IpProtocol=tcp,FromPort=80,ToPort=80,UserIdGroupPairs=[{GroupId=$AGENT_SG_ID}]" \
+            "IpProtocol=tcp,FromPort=443,ToPort=443,UserIdGroupPairs=[{GroupId=$AGENT_SG_ID}]" 2>/dev/null || true
     fi
 
     echo "Deleting Agent SG $AGENT_SG_ID..."

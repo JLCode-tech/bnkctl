@@ -178,6 +178,13 @@ func Phase06RouteTables(ctx context.Context, cl *intent.Cluster, st *state.State
 		if err != nil {
 			return fmt.Errorf("phase 06 routetables: %w", err)
 		}
+		if cl.Network.NatGatewaysCount() >= 1 {
+			if natID := st.Get("NAT_GW_ID"); natID != "" {
+				if err := ensureDefaultRoute(ctx, c, extRT, "", natID); err != nil {
+					return fmt.Errorf("phase 06 routetables: %w", err)
+				}
+			}
+		}
 		if err := ensureSubnetAssociation(ctx, c, st, extRT, extSub, "BNK_EXT_RT_ASSOC"); err != nil {
 			return fmt.Errorf("phase 06 routetables: %w", err)
 		}

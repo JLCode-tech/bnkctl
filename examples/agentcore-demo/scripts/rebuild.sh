@@ -38,7 +38,7 @@ CFG="${CFG:-$DEMO_DIR/cluster.yaml}"
 CLUSTER="${CLUSTER:-$(awk '/^  name:/{print $2; exit}' "$CFG")}"
 REGION="${REGION:-$(awk '/^  region:/{print $2; exit}' "$CFG")}"
 : "${CLUSTER:?could not read metadata.name from $CFG}"; : "${REGION:?could not read metadata.region from $CFG}"
-CONFIG="examples/agentcore-demo/cluster.yaml"
+CONFIG="${CFG#$REPO_ROOT/}"
 KC="$REPO_ROOT/.awsbnkctl/$CLUSTER/kubeconfig"
 # The Gateway name is fixed in gateway-deployment.yaml (the NetPolicies reference
 # it), so it does not follow the cluster name.
@@ -116,6 +116,9 @@ ok "kubeconfig: ${KC#$REPO_ROOT/}"
 
 # ── 2. the MCP tool ──────────────────────────────────────────────────────────
 step "MCP tool  (as a DIRECTORY — kustomize generates the token Secret)"
+# Remove any default-namespace EgressGateway created during 'up' so pod startup
+# pip install traffic uses the VPC NAT Gateway instead of bnkvxlan9000.
+kubectl delete egressgateway egress-gw -n default --ignore-not-found >/dev/null 2>&1 || true
 ./awsbnkctl k apply -f examples/agentcore-demo/mcp-tool/ || die "mcp-tool apply failed"
 kubectl rollout status deploy/mcp-financial-tool -n default --timeout=180s \
   || die "mcp-financial-tool never became ready (check: kubectl logs deploy/mcp-financial-tool)"
@@ -166,6 +169,7 @@ done
 step "Governance policy & BNK 2.4.1 AI Gateway  (iRule, NetPolicies, 6-CRD inference.k8s.f5.com/v1alpha1 chain, AppPolicy)"
 kubectl apply -f "$DEMO_DIR/mcp-security-policy.yaml" || die "policy apply failed"
 kubectl apply -f "$DEMO_DIR/aigateway-241.yaml" || die "aigateway-241.yaml apply failed"
+CLUSTER="$CLUSTER" "$DEMO_DIR/scripts/setup-llm-gateway.sh" || warn "setup-llm-gateway.sh reported warnings"
 for i in $(seq 1 40); do
   IR=$(kubectl get f5-big-cne-irules mcp-rate-limit-irule -n default \
        -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null)
@@ -299,4 +303,4 @@ note "     aws ec2 describe-network-interfaces \\"
 note "       --filters Name=interface-type,Values=agentic_ai --query 'length(NetworkInterfaces)'"
 note "  1. scripts/teardown-stranger.sh"
 note "  2. scripts/teardown-agentcore-network.sh    (deletes the agent SG)"
-note "  3. ./awsbnkctl down --config $CONFIG --yes --auto   (from the repo root)"
+note "  3. ./awsbnkctl down --config $CONFIG --yes          (from the repo root)"

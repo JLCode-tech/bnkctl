@@ -54,6 +54,7 @@ bnk:
   version: "2.4.1"
   manifestVersion: "2.4.1"
   floVersion: "v2.30.1-0.0.8"
+  tmmMtu: 1500
   bgp: true
   aiGateway:
     enabled: true

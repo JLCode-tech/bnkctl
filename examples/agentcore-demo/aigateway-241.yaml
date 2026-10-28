@@ -61,9 +61,7 @@ metadata:
 spec:
   tenantRef:
     name: default-tenant
-  type: Bedrock
   vendor: Bedrock
-  endpointURL: "https://bedrock-runtime.ap-southeast-2.amazonaws.com/openai/v1"
   bedrock:
     region: "ap-southeast-2"
     baseURL: "https://bedrock-runtime.ap-southeast-2.amazonaws.com/openai/v1"
@@ -103,9 +101,7 @@ metadata:
 spec:
   tenantRef:
     name: default-tenant
-  type: Bedrock
   vendor: Bedrock
-  endpointURL: "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1"
   bedrock:
     region: "us-east-1"
     baseURL: "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1"
@@ -132,7 +128,7 @@ spec:
       providerRef:
         name: bedrock-ap-southeast-2
       upstream: anthropic.claude-sonnet-4-5-20250929-v1:0
-      dialects: ["OpenAIChat"]
+      dialects: ["bedrock"]
       weight: 80
       state: Active
       pricing:
@@ -142,7 +138,7 @@ spec:
       providerRef:
         name: bedrock-us-east-1-fallback
       upstream: anthropic.claude-3-5-haiku-20241022-v1:0
-      dialects: ["OpenAIChat"]
+      dialects: ["bedrock"]
       weight: 20
       state: Active
       pricing:
@@ -165,7 +161,7 @@ spec:
       providerRef:
         name: bedrock-ap-southeast-2
       upstream: anthropic.claude-sonnet-4-5-20250929-v1:0
-      dialects: ["OpenAIChat"]
+      dialects: ["bedrock"]
       weight: 80
       state: Active
       pricing:
@@ -175,7 +171,7 @@ spec:
       providerRef:
         name: bedrock-us-east-1-fallback
       upstream: anthropic.claude-3-5-haiku-20241022-v1:0
-      dialects: ["OpenAIChat"]
+      dialects: ["bedrock"]
       weight: 20
       state: Active
       pricing:
@@ -238,48 +234,6 @@ spec:
         request: 300s
         backendRequest: 300s
 ---
-# vLLM Semantic Router workload Service + cross-namespace ExternalName Service (Manual Section 4.5.5)
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: vllm-semantic-router-system
-  labels:
-    app.kubernetes.io/part-of: bnk-agentcore-demo
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: vsr-service
-  namespace: vllm-semantic-router-system
-  labels:
-    app.kubernetes.io/name: vllm-semantic-router
-    app.kubernetes.io/part-of: bnk-agentcore-demo
-spec:
-  selector:
-    app.kubernetes.io/name: vllm-semantic-router
-  ports:
-    - name: http
-      port: 8000
-      targetPort: 8000
-      protocol: TCP
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: vllmsr
-  namespace: f5-cne-system
-  labels:
-    app.kubernetes.io/part-of: bnk-agentcore-demo
-    app.kubernetes.io/component: semantic-router-bridge
-spec:
-  type: ExternalName
-  externalName: vsr-service.vllm-semantic-router-system.svc.cluster.local
-  ports:
-    - name: http
-      port: 8000
-      targetPort: 8000
-      protocol: TCP
----
 apiVersion: inference.k8s.f5.com/v1alpha1
 kind: AIGatewayProfile
 metadata:
@@ -296,14 +250,7 @@ spec:
   tenantRef:
     name: default-tenant
   auth:
-    virtualKeys:
-      required: true
-  modelRouting:
-    semanticRouter:
-      serviceRef:
-        name: vllmsr
-        port: 8000
-      timeout: 5s
+    virtualKeys: {}
   failover:
     on429: true
     on5xx: true
@@ -311,13 +258,6 @@ spec:
     cooldown: 30s
     honorRetryAfter: true
   promptCache: {}
-  providers:
-    - name: bedrock-ap-southeast-2
-      credentialRef:
-        name: bedrock-primary-cred
-    - name: bedrock-us-east-1-fallback
-      credentialRef:
-        name: bedrock-fallback-cred
 ---
 apiVersion: gateway.k8s.f5.com/v1alpha1
 kind: AppPolicy
@@ -338,8 +278,12 @@ spec:
       name: llm-chat-route
 ---
 # ------------------------------------------------------------------------------
-# Step 5: TMM DNS Resolver in f5-cne-system (F5BigDnsCache/aigw-dns-resolver)
-# Forwards root zone ("") queries to cluster DNS and 8.8.8.8 / 1.1.1.1
+# Step 5: TMM Egress, Internal Routes & DNS in f5-cne-system
+#   - Infra/infra staticRoutes (provisioned by awsbnkctl) program TMM ZebOS/kernel FIB routes for:
+#     * 0.0.0.0/0 -> 10.0.10.1 (external NAT GW for AWS Bedrock egress)
+#     * 172.20.0.0/16 -> 10.0.20.1 (Kubernetes Service CIDR via internal subnet GW)
+#     * 10.0.11.0/24 & 10.0.12.0/24 -> 10.0.20.1 (Pod CIDRs across AZs)
+#   - F5BigDnsCache/aigw-dns-resolver forwards root zone (".") queries
 # ------------------------------------------------------------------------------
 apiVersion: k8s.f5net.com/v1
 kind: F5BigDnsCache
@@ -356,11 +300,9 @@ spec:
     forwardZones:
       - forwardZone: "."
         nameServers:
-          - ipAddress: 10.100.0.10
+          - ipAddress: 172.20.0.10
             port: 53
           - ipAddress: 8.8.8.8
             port: 53
           - ipAddress: 1.1.1.1
             port: 53
-
-

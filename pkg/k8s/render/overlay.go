@@ -146,6 +146,7 @@ func RenderUnifiedCNEInstance(cl *intent.Cluster, underlay *provider.UnderlayCon
 	tmmEnv := []map[string]any{
 		{"name": "PAL_CPU_SET", "value": palCpu},
 		{"name": "DEFAULT_ROUTE_INTERFACE_MTU", "value": fmt.Sprintf("%d", mtu)},
+		{"name": "TMM_SOCAT_DISABLE", "value": "1"},
 	}
 	if underlay.ServiceCIDR != "" {
 		tmmEnv = append(tmmEnv, map[string]any{"name": TMMK8sRoutesEnv, "value": underlay.ServiceCIDR})
@@ -210,7 +211,7 @@ func RenderUnifiedCNEInstance(cl *intent.Cluster, underlay *provider.UnderlayCon
 			resEnv := fmt.Sprintf("ROBIN_VFIO_RESOURCE_%d", i+1)
 			pciEnv := "PCIDEVICE_INTEL_COM_" + ifName
 			tmmEnv = append(tmmEnv,
-				map[string]any{"name": resEnv, "value": "intel.com/" + strings.ToLower(ifName)},
+				map[string]any{"name": resEnv, "value": ifName},
 				map[string]any{"name": pciEnv, "value": pci},
 			)
 		}

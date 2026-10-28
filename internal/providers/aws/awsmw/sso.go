@@ -108,7 +108,8 @@ func CheckAuthOrDie(profile string) {
 // triggering an exit. Used by tests to assert the flag was set.
 func AuthFailed() bool { return authFail.Load() }
 
-// ErrorCode extracts the smithy.APIError code from err, or returns "" if err is not an APIError.
+// ErrorCode extracts the smithy.APIError code (or any ErrorCode() string method) from err,
+// or returns "" if err does not carry an error code.
 func ErrorCode(err error) string {
 	if err == nil {
 		return ""
@@ -117,7 +118,29 @@ func ErrorCode(err error) string {
 	if errors.As(err, &ae) {
 		return ae.ErrorCode()
 	}
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		if coded, ok := e.(interface{ ErrorCode() string }); ok {
+			return coded.ErrorCode()
+		}
+	}
 	return ""
+}
+
+// IsDependencyViolation reports whether err is an AWS EC2 DependencyViolation error.
+func IsDependencyViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch ErrorCode(err) {
+	case "DependencyViolation", "ResourceInUse", "CannotDelete":
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "DependencyViolation") ||
+		strings.Contains(msg, "ResourceInUse") ||
+		strings.Contains(msg, "CannotDelete") ||
+		strings.Contains(msg, "has a dependent object") ||
+		strings.Contains(msg, "has dependencies")
 }
 
 // IsNotFound reports whether err represents a missing AWS resource (404 / NotFound / NoSuchEntity).

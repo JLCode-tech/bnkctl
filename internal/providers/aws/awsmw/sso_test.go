@@ -108,3 +108,21 @@ func TestCheckAuthOrDie_ExitsWhenFlagSet(t *testing.T) {
 		t.Fatalf("expected exit code 99, got %d", exitCode)
 	}
 }
+
+func TestIsDependencyViolation(t *testing.T) {
+	if IsDependencyViolation(nil) {
+		t.Fatal("expected false for nil error")
+	}
+	if !IsDependencyViolation(&fakeAPIError{code: "DependencyViolation", message: "mapped public address"}) {
+		t.Fatal("expected true for DependencyViolation code")
+	}
+	if !IsDependencyViolation(&fakeAPIError{code: "ResourceInUse", message: "in use"}) {
+		t.Fatal("expected true for ResourceInUse code")
+	}
+	if !IsDependencyViolation(fmt.Errorf("wrapped: has a dependent object")) {
+		t.Fatal("expected true for 'has a dependent object' message")
+	}
+	if IsDependencyViolation(&fakeAPIError{code: "InvalidVpcID.NotFound", message: "not found"}) {
+		t.Fatal("expected false for NotFound error")
+	}
+}
