@@ -1266,8 +1266,63 @@ func (c *Cluster) applyDefaults(baseDir string) {
 	}
 }
 
+func allSubnetAZsEmptyOrAuto(c *Cluster) bool {
+	hasAny := false
+	for _, s := range c.Network.Subnets.PublicList {
+		hasAny = true
+		if s.AZ != "" && s.AZ != "auto" {
+			return false
+		}
+	}
+	for _, s := range c.Network.Subnets.PrivateList {
+		hasAny = true
+		if s.AZ != "" && s.AZ != "auto" {
+			return false
+		}
+	}
+	if c.Network.DataPath != nil {
+		if c.Network.DataPath.External.CIDR != "" {
+			hasAny = true
+			if c.Network.DataPath.External.AZ != "" && c.Network.DataPath.External.AZ != "auto" {
+				return false
+			}
+		}
+		if c.Network.DataPath.Internal.CIDR != "" {
+			hasAny = true
+			if c.Network.DataPath.Internal.AZ != "" && c.Network.DataPath.Internal.AZ != "auto" {
+				return false
+			}
+		}
+	}
+	return hasAny
+}
+
 func (c *Cluster) applyAWSDefaults() {
 	c.Pattern = normalizePattern(c.Pattern)
+
+	if len(c.Network.AZs) == 0 && c.Metadata.Region != "" && allSubnetAZsEmptyOrAuto(c) {
+		c.Network.AZs = []string{c.Metadata.Region + "a", c.Metadata.Region + "b"}
+	}
+	if len(c.Network.AZs) > 0 {
+		for i := range c.Network.Subnets.PublicList {
+			if c.Network.Subnets.PublicList[i].AZ == "" || c.Network.Subnets.PublicList[i].AZ == "auto" {
+				c.Network.Subnets.PublicList[i].AZ = c.Network.AZs[i%len(c.Network.AZs)]
+			}
+		}
+		for i := range c.Network.Subnets.PrivateList {
+			if c.Network.Subnets.PrivateList[i].AZ == "" || c.Network.Subnets.PrivateList[i].AZ == "auto" {
+				c.Network.Subnets.PrivateList[i].AZ = c.Network.AZs[i%len(c.Network.AZs)]
+			}
+		}
+		if c.Network.DataPath != nil {
+			if c.Network.DataPath.External.CIDR != "" && (c.Network.DataPath.External.AZ == "" || c.Network.DataPath.External.AZ == "auto") {
+				c.Network.DataPath.External.AZ = c.Network.AZs[0]
+			}
+			if c.Network.DataPath.Internal.CIDR != "" && (c.Network.DataPath.Internal.AZ == "" || c.Network.DataPath.Internal.AZ == "auto") {
+				c.Network.DataPath.Internal.AZ = c.Network.AZs[0]
+			}
+		}
+	}
 
 	if c.Metadata.Tags == nil && len(c.Tags) > 0 {
 		c.Metadata.Tags = c.Tags

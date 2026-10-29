@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/JLCode-tech/bnkctl/internal/providers/aws/awsmw"
@@ -14,6 +15,85 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
+
+func resolveClusterAZs(ctx context.Context, cl *intent.Cluster, ec2c PhaseEC2API) {
+	if cl == nil || ec2c == nil {
+		return
+	}
+	out, err := ec2c.DescribeAvailabilityZones(ctx, &ec2.DescribeAvailabilityZonesInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("state"), Values: []string{"available"}},
+		},
+	})
+	if err != nil || out == nil || len(out.AvailabilityZones) == 0 {
+		return
+	}
+	var avail []string
+	availSet := make(map[string]bool, len(out.AvailabilityZones))
+	for _, z := range out.AvailabilityZones {
+		if z.ZoneName == nil || *z.ZoneName == "" {
+			continue
+		}
+		if z.ZoneType != nil && *z.ZoneType != "" && *z.ZoneType != "availability-zone" {
+			continue
+		}
+		name := *z.ZoneName
+		avail = append(avail, name)
+		availSet[name] = true
+	}
+	if len(avail) == 0 {
+		return
+	}
+	sort.Strings(avail)
+
+	needRemap := len(cl.Network.AZs) == 0
+	for _, az := range cl.Network.AZs {
+		if az == "" || az == "auto" || !availSet[az] {
+			needRemap = true
+			break
+		}
+	}
+	if needRemap {
+		count := len(cl.Network.AZs)
+		if count < 2 {
+			count = 2
+		}
+		if count > len(avail) {
+			count = len(avail)
+		}
+		cl.Network.AZs = append([]string(nil), avail[:count]...)
+	}
+	if len(cl.Network.AZs) == 0 {
+		return
+	}
+	for i := range cl.Network.Subnets.PublicList {
+		az := cl.Network.Subnets.PublicList[i].AZ
+		if az == "" || az == "auto" || !availSet[az] {
+			cl.Network.Subnets.PublicList[i].AZ = cl.Network.AZs[i%len(cl.Network.AZs)]
+		}
+	}
+	for i := range cl.Network.Subnets.PrivateList {
+		az := cl.Network.Subnets.PrivateList[i].AZ
+		if az == "" || az == "auto" || !availSet[az] {
+			cl.Network.Subnets.PrivateList[i].AZ = cl.Network.AZs[i%len(cl.Network.AZs)]
+		}
+	}
+	if cl.Network.DataPath != nil {
+		if cl.Network.DataPath.External.CIDR != "" {
+			az := cl.Network.DataPath.External.AZ
+			if az == "" || az == "auto" || !availSet[az] {
+				cl.Network.DataPath.External.AZ = cl.Network.AZs[0]
+			}
+		}
+		if cl.Network.DataPath.Internal.CIDR != "" {
+			az := cl.Network.DataPath.Internal.AZ
+			if az == "" || az == "auto" || !availSet[az] {
+				cl.Network.DataPath.Internal.AZ = cl.Network.AZs[0]
+			}
+		}
+	}
+	fmt.Fprintf(os.Stderr, "[phase 03] dynamically discovered available AZs: %v (active: %v)\n", avail, cl.Network.AZs)
+}
 
 func subnetStateKey(prefix string, index int) string {
 	return fmt.Sprintf("%s_%d", prefix, index)
@@ -98,6 +178,8 @@ func Phase03Subnets(ctx context.Context, cl *intent.Cluster, st *state.State, c 
 	if vpcID == "" {
 		return fmt.Errorf("phase 03 subnets: VPC_ID not found in state (did phase 02 run?)")
 	}
+
+	resolveClusterAZs(ctx, cl, c.PhaseEC2)
 
 	clusterTag := "kubernetes.io/cluster/" + cl.Metadata.Name
 

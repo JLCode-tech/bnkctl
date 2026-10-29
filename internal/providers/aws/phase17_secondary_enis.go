@@ -401,10 +401,17 @@ func Phase17SecondaryENIs(ctx context.Context, cl *intent.Cluster, st *state.Sta
 	}
 
 	if primaryENIID := st.Get("PRIMARY_ENI_ID"); primaryENIID != "" {
+		svcCIDR := st.Get("SERVICE_CIDR")
+		if svcCIDR == "" {
+			svcCIDR = st.Get("EKS_SERVICE_CIDR")
+		}
+		if svcCIDR == "" {
+			svcCIDR = "172.20.0.0/16"
+		}
 		for _, rtKey := range []string{"BNK_EXT_RT_ID", "BNK_INT_RT_ID"} {
 			if rtID := st.Get(rtKey); rtID != "" {
-				if err := replaceOrCreateENIRoute(ctx, c, rtID, "172.20.0.0/16", primaryENIID); err != nil {
-					return fmt.Errorf("phase 17 secondary enis: route 172.20.0.0/16 -> %s on %s: %w", primaryENIID, rtID, err)
+				if err := replaceOrCreateENIRoute(ctx, c, rtID, svcCIDR, primaryENIID); err != nil {
+					return fmt.Errorf("phase 17 secondary enis: route %s -> %s on %s: %w", svcCIDR, primaryENIID, rtID, err)
 				}
 			}
 		}
