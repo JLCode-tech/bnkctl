@@ -203,6 +203,13 @@ func (c *Clients) KubeconfigFromCluster(ci *ClusterInfo) (string, error) {
 	// we publish an `awsbnkctl eks get-token` subcommand. Until then
 	// this matches the shape `aws eks update-kubeconfig` produces, which
 	// is what every EKS tutorial uses.
+	envBlock := ""
+	if p := strings.TrimSpace(c.Profile); p != "" {
+		envBlock = fmt.Sprintf(`      env:
+        - name: AWS_PROFILE
+          value: %s
+`, p)
+	}
 	yaml := fmt.Sprintf(`apiVersion: v1
 kind: Config
 current-context: %s
@@ -229,7 +236,7 @@ users:
         - get-token
         - --cluster-name
         - %s
-      interactiveMode: IfAvailable
+%s      interactiveMode: IfAvailable
       provideClusterInfo: false
 `,
 		ci.Arn,
@@ -237,6 +244,7 @@ users:
 		ci.Arn, ci.Arn, ci.Arn,
 		ci.Arn,
 		region, ci.Name,
+		envBlock,
 	)
 	return yaml, nil
 }

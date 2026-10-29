@@ -253,3 +253,27 @@ func newTestClients(t *testing.T, region, ak, sk string) *Clients {
 		AWSConfig: cfg,
 	}
 }
+
+func TestKubeconfigFromCluster_IncludesProfileEnv(t *testing.T) {
+	c := newTestClients(t, "ap-southeast-2", "AKID", "SECRET")
+	c.Profile = "Users-292785712872"
+	info := &ClusterInfo{
+		Name:                 "demo",
+		Endpoint:             "https://demo.eks.amazonaws.com",
+		CertificateAuthority: "LS0tLS1CRUdJTg==",
+		Arn:                  "arn:aws:eks:ap-southeast-2:111122223333:cluster/demo",
+	}
+	yaml, err := c.KubeconfigFromCluster(info)
+	if err != nil {
+		t.Fatalf("KubeconfigFromCluster: %v", err)
+	}
+	for _, frag := range []string{
+		"env:",
+		"- name: AWS_PROFILE",
+		"value: Users-292785712872",
+	} {
+		if !strings.Contains(yaml, frag) {
+			t.Errorf("kubeconfig missing profile env fragment %q\n--- yaml ---\n%s", frag, yaml)
+		}
+	}
+}
