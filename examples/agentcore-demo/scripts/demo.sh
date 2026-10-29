@@ -330,7 +330,7 @@ if [ -n "$STRANGER" ]; then
   # inline script loses its line structure.
   FW_SCRIPT=$(cat <<EOSCRIPT
 #!/bin/bash
-OUT=$STRANGER_OUT; VIP=$VIP; HOST=$INGRESS_HOST; TOK=$EXTERNAL_TOKEN
+OUT=$STRANGER_OUT; VIP=$VIP; HOST=$INGRESS_HOST; TOK=$AGENT_TOKEN
 DEV=\$(ip -o -4 addr show | awk -v ip="\$OUT/" '\$4 ~ ip {print \$2}')
 OUTGW=\$(echo "\$OUT" | awk -F. '{print \$1"."\$2"."\$3".1"}')
 # source-based routing, so packets from the out-of-range NIC leave via it
@@ -386,7 +386,7 @@ TOKEN=$(curl -s -X POST "$FORGE/api/auth/login" -H 'Content-Type: application/js
   | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))' 2>/dev/null)
 if [ -n "$TOKEN" ]; then
   CLUSTER_ID=$(curl -s -H "Authorization: Bearer $TOKEN" "$FORGE/api/k8s/clusters" --max-time 8 2>/dev/null \
-    | python3 -c "import sys,json;print(next((c['id'] for c in json.load(sys.stdin) if c['name']=='$CLUSTER'),''))" 2>/dev/null)
+    | python3 -c "import sys,json;d=json.load(sys.stdin);cs=(d.get('clusters') if isinstance(d,dict) else d) or [];print(next((c['id'] for c in cs if c.get('name')=='$CLUSTER'),''))" 2>/dev/null)
 fi
 if [ -n "$CLUSTER_ID" ]; then
   curl -s -H "Authorization: Bearer $TOKEN" \
@@ -394,9 +394,11 @@ if [ -n "$CLUSTER_ID" ]; then
     | python3 -c '
 import sys,json
 d=json.load(sys.stdin)
-print(f"  available: {d.get(\"available\")}")
+avail=d.get("available")
+print(f"  available: {avail}")
 for r in d.get("rows",[]):
-    print(f"  {r[\"model\"]:<38} req={r[\"requests\"]:<4} tokens={r[\"tokens\"]:<7} cost={round(r.get(\"cost\") or 0,4)}")
+    m=r["model"]; req=r["requests"]; tok=r["tokens"]; cost=round(r.get("cost") or 0,4)
+    print(f"  {m:<38} req={req:<4} tokens={tok:<7} cost={cost}")
 ' 2>/dev/null || warn "could not read Forge rankings"
   ok "two legs, one view"
   note "mcp:finance-tool  = BNK's view: who was allowed, who was refused, 0 tokens"

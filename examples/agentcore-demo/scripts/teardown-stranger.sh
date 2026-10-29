@@ -45,7 +45,6 @@ note() { printf '   %s\n' "$1"; }
 
 VPC_ID=$(aws ec2 describe-vpcs \
     --filters "Name=tag:awsbnkctl:cluster,Values=${CLUSTER_NAME}" \
-              "Name=tag:awsbnkctl:component,Values=vpc" \
     --query "Vpcs[0].VpcId" --output text 2>/dev/null)
 if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
     note "No VPC for $CLUSTER_NAME — nothing to do (already torn down?)"
@@ -57,7 +56,7 @@ SG_ID=$(aws ec2 describe-security-groups \
     --filters "Name=vpc-id,Values=${VPC_ID}" "Name=group-name,Values=${TAG}" \
     --query "SecurityGroups[0].GroupId" --output text 2>/dev/null)
 BNK_DATA_SG=$(aws ec2 describe-security-groups \
-    --filters "Name=vpc-id,Values=${VPC_ID}" "Name=group-name,Values=${CLUSTER_NAME}-bnk-data" \
+    --filters "Name=vpc-id,Values=${VPC_ID}" "Name=group-name,Values=${CLUSTER_NAME}-bnk-data,${CLUSTER_NAME}-bnk-datapath-sg" \
     --query "SecurityGroups[0].GroupId" --output text 2>/dev/null)
 
 # 1. Revoke the cross-reference first, or the SG delete below fails.

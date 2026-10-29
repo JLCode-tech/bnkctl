@@ -10,6 +10,7 @@ DEMO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${DEMO_DIR}/../.." && pwd)"
 
 CLUSTER="${CLUSTER:-bnk-agentcore-demo}"
+CFG="${CFG:-${DEMO_DIR}/cluster.yaml}"
 BNK_NS="${BNK_NS:-f5-cne-system}"
 TENANT="${TENANT:-default-tenant}"
 ROUTE_NAME="${ROUTE_NAME:-llm-chat-route}"
@@ -67,25 +68,40 @@ sed \
   "${DEMO_DIR}/k8s/bnk-llm-gateway.yaml" | kubectl apply -f -
 
 # Step 6: Restart CNE Controller in f5-bnk to pick up net-resolver DNS + AIGatewayProfile
-echo "[Step 6] Restarting CNE controller in ${BNK_NS} to activate net-resolver DNS and AIGatewayProfile..."
-if kubectl get deploy f5-cne-controller -n "${BNK_NS}" >/dev/null 2>&1; then
-  kubectl rollout restart deploy/f5-cne-controller -n "${BNK_NS}"
-  kubectl rollout status deploy/f5-cne-controller -n "${BNK_NS}" --timeout=180s
-elif kubectl get deploy -n "${BNK_NS}" -l app=cne-controller -o name 2>/dev/null | grep -q .; then
-  kubectl rollout restart deploy -n "${BNK_NS}" -l app=cne-controller
-  kubectl rollout status deploy -n "${BNK_NS}" -l app=cne-controller --timeout=180s
+PROG_STATUS="$(kubectl get aigatewayprofiles.inference.k8s.f5.com "${ROUTE_NAME}" -n "${BNK_NS}" \
+  -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null || true)"
+if [ "${PROG_STATUS}" != "True" ]; then
+  echo "[Step 6] Restarting CNE controller in ${BNK_NS} to activate net-resolver DNS and AIGatewayProfile..."
+  if kubectl get deploy f5-cne-controller -n "${BNK_NS}" >/dev/null 2>&1; then
+    kubectl rollout restart deploy/f5-cne-controller -n "${BNK_NS}"
+    kubectl rollout status deploy/f5-cne-controller -n "${BNK_NS}" --timeout=180s
+  elif kubectl get deploy -n "${BNK_NS}" -l app=cne-controller -o name 2>/dev/null | grep -q .; then
+    kubectl rollout restart deploy -n "${BNK_NS}" -l app=cne-controller
+    kubectl rollout status deploy -n "${BNK_NS}" -l app=cne-controller --timeout=180s
+  fi
+  for _ in $(seq 1 30); do
+    if [ "$(kubectl get pods -n "${BNK_NS}" --no-headers 2>/dev/null | grep -c '^f5-cne-controller')" -eq 1 ] && \
+       kubectl get pods -n "${BNK_NS}" --no-headers 2>/dev/null | grep -qE '^f5-cne-controller.*3/3.*Running'; then
+      break
+    fi
+    sleep 2
+  done
+else
+  echo "[Step 6] AIGatewayProfile/${ROUTE_NAME} already Programmed=True in ${BNK_NS}; skipping CNE controller restart."
 fi
-for _ in $(seq 1 30); do
-  if [ "$(kubectl get pods -n "${BNK_NS}" --no-headers 2>/dev/null | grep -c '^f5-cne-controller')" -eq 1 ] && \
-     kubectl get pods -n "${BNK_NS}" --no-headers 2>/dev/null | grep -qE '^f5-cne-controller.*3/3.*Running'; then
+
+echo "[Verify] Waiting for Gateway and AIGatewayProfile/${ROUTE_NAME} reconciliation in ${BNK_NS}..."
+for _ in $(seq 1 60); do
+  PROG_STATUS="$(kubectl get aigatewayprofiles.inference.k8s.f5.com "${ROUTE_NAME}" -n "${BNK_NS}" \
+    -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null || true)"
+  if [ "${PROG_STATUS}" = "True" ]; then
     break
   fi
   sleep 2
 done
-
-echo "[Verify] Checking AIGatewayProfileAccepted condition on AIGatewayProfile/${ROUTE_NAME} in ${BNK_NS}..."
 kubectl get aigatewayprofiles.inference.k8s.f5.com "${ROUTE_NAME}" -n "${BNK_NS}" \
-  -o jsonpath='{.status.conditions[?(@.type=="AIGatewayProfileAccepted")].status}{"\n"}' 2>/dev/null || true
+  -o jsonpath='Accepted={.status.conditions[?(@.type=="Accepted")].status} Programmed={.status.conditions[?(@.type=="Programmed")].status}{"\n"}' 2>/dev/null || true
+
 
 # Step 7: Provision DSSM Organizations (3), Teams (4), Principals (5), Budgets, RateLimits & Virtual Keys (f5vk_...)
 echo "[Step 7] Provisioning DSSM Governance hierarchy (3 organizations, 5 principals) & Virtual API Keys (f5vk_...)..."
@@ -118,7 +134,12 @@ if [ -n "${CNE_POD}" ]; then
     TENANT_BASE="${GOV_BASE%/governance}"
   fi
 
-  ADMIN_PASS="$(kubectl get secret "aitenant-${TENANT}-admin" -n "${BNK_NS}" -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  ADMIN_PASS=""
+  for _ in $(seq 1 15); do
+    ADMIN_PASS="$(kubectl get secret "aitenant-${TENANT}-admin" -n "${BNK_NS}" -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+    [ -n "${ADMIN_PASS}" ] && break
+    sleep 2
+  done
   BEARER_TOKEN=""
   if [ -n "${ADMIN_PASS}" ]; then
     for _ in $(seq 1 20); do
@@ -192,6 +213,9 @@ if [ -n "${CNE_POD}" ]; then
   echo "  portfolio-copilot-agent: ${VK_COPILOT:-<existing>}"
 
   CH_PASS="$(kubectl get secret f5-aigateway-clickhouse-auth -n "${BNK_NS}" -o jsonpath='{.data.otel-password}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  if [ -z "${CH_PASS}" ]; then
+    CH_PASS="$(kubectl get secret f5-aigateway-clickhouse-auth -n "${BNK_NS}" -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  fi
 
   if [ -n "${VK_FINANCE}${VK_FX}${VK_RESEARCH}${VK_CREDIT}${VK_COPILOT}" ]; then
     kubectl create secret generic bnk-aigw-virtual-keys -n default \
@@ -213,6 +237,42 @@ if [ -n "${CNE_POD}" ]; then
     if kubectl get deploy agentcore-traffic-generator -n default >/dev/null 2>&1; then
       kubectl rollout restart deploy/agentcore-traffic-generator -n default
     fi
+  fi
+fi
+
+# Sync governance hierarchy to BNK Forge if reachable and awsbnkctl is built
+FORGE_URL="${FORGE_URL:-http://localhost:8000}"
+if [ -x "${REPO_ROOT}/awsbnkctl" ] && curl -sS -m 3 -o /dev/null "${FORGE_URL}/api/auth/login" 2>/dev/null; then
+  echo "Syncing DSSM Governance hierarchy (3 organizations, 4 teams, 5 principals) to BNK Forge..."
+  if [ ! -f "${REPO_ROOT}/.awsbnkctl/${CLUSTER}/forge_link.json" ]; then
+    "${REPO_ROOT}/awsbnkctl" forge register --config "${CFG}" >/dev/null 2>&1 || true
+  fi
+  for spec in \
+    "f5-agentcore-org|agentcore-platform-team|finance-agent-v2|finance-agent-v2-vk|500.0" \
+    "sovereign-wealth-apac|quant-trading-desk|fx-arbitrage-agent|fx-arbitrage-prod-vk|1500.0" \
+    "sovereign-wealth-apac|quant-trading-desk|dr-marcus-vance|vance-research-notebook-vk|1500.0" \
+    "sovereign-wealth-apac|sovereign-risk-ops|credit-underwriter-agent|credit-underwriter-prod-vk|1500.0" \
+    "sydney-retail-banking|wealth-advisory-ai|portfolio-copilot-agent|portfolio-copilot-prod-vk|800.0"
+  do
+    IFS='|' read -r f_org f_team f_prin f_vk f_budget <<< "${spec}"
+    "${REPO_ROOT}/awsbnkctl" forge governance bootstrap --config "${CFG}" \
+      --tenant "${TENANT}" --org "${f_org}" --team "${f_team}" \
+      --principal "${f_prin}" --key-name "${f_vk}" \
+      --budget-usd "${f_budget}" --rpm-limit 60 --tpm-limit 120000 >/dev/null 2>&1 || true
+  done
+  "${REPO_ROOT}/awsbnkctl" forge governance remediate restart_controller --config "${CFG}" -n "${BNK_NS}" >/dev/null 2>&1 || true
+fi
+
+# Ensure f5-toda-fluentd-custom retains stdout.conf alongside aigw-hsl.pipeline
+# (f5-lifecycle-operator overwrites f5-toda-fluentd-custom when AI Gateway HSL is reconciled)
+if kubectl get configmap f5-toda-fluentd-custom -n f5-cne-core >/dev/null 2>&1; then
+  HAS_STDOUT="$(kubectl get configmap f5-toda-fluentd-custom -n f5-cne-core -o jsonpath='{.data.stdout\.conf}' 2>/dev/null || true)"
+  if [ -z "${HAS_STDOUT}" ]; then
+    echo "Restoring stdout.conf in f5-cne-core/f5-toda-fluentd-custom for bnkgov-collector -> Loki streaming..."
+    kubectl patch configmap f5-toda-fluentd-custom -n f5-cne-core --type merge \
+      -p '{"data":{"stdout.conf":"<store>\n  @type stdout\n</store>\n"}}' >/dev/null 2>&1 || true
+    kubectl rollout restart deploy/f5-toda-fluentd -n f5-cne-core >/dev/null 2>&1 || true
+    kubectl rollout status deploy/f5-toda-fluentd -n f5-cne-core --timeout=90s >/dev/null 2>&1 || true
   fi
 fi
 

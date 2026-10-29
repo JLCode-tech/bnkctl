@@ -113,6 +113,10 @@ fi
 export KUBECONFIG="$KC"
 kubectl get --raw=/readyz >/dev/null 2>&1 || die "cluster does not answer via $KC"
 ok "kubeconfig: ${KC#$REPO_ROOT/}"
+if curl -sS -m 3 -o /dev/null "${FORGE_URL:-http://localhost:8000}/api/auth/login" 2>/dev/null; then
+  ./awsbnkctl forge register --config "$CONFIG" && ok "registered $CLUSTER in BNK Forge" \
+    || warn "forge register reported warnings"
+fi
 
 # ── 2. the MCP tool ──────────────────────────────────────────────────────────
 step "MCP tool  (as a DIRECTORY — kustomize generates the token Secret)"

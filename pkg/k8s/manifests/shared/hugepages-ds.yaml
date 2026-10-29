@@ -44,6 +44,7 @@ spec:
           set -e
           sysctl -qw net.ipv4.ip_forward=1
           sysctl -qw net.ipv4.conf.default.proxy_arp=1
+          sysctl -qw net.netfilter.nf_conntrack_tcp_be_liberal=1 2>/dev/null || true
           for f in /proc/sys/net/ipv4/conf/eni*/proxy_arp; do [ -e "$f" ] && echo 1 > "$f"; done
           echo "[proxy-arp] node=$(hostname) enabled on conf.default and $(ls /proc/sys/net/ipv4/conf/ | grep -c '^eni') existing eni* veths"
           nsenter -t 1 -m -u -i -n -p -- sh -c '
@@ -53,6 +54,7 @@ spec:
                 ethtool -K "$dev" tso off gso off gro off tx-nocache-copy off 2>/dev/null || true
               fi
             done
+            iptables -C FORWARD -m conntrack --ctstate INVALID -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -m conntrack --ctstate INVALID -j ACCEPT || true
             iptables -t nat -C PREROUTING -s 10.0.10.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s 10.0.10.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES || true
             iptables -t nat -C PREROUTING -s 10.0.20.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s 10.0.20.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES || true
             iptables -t nat -C POSTROUTING -s 10.0.10.0/24 -d 10.0.0.0/16 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.0.10.0/24 -d 10.0.0.0/16 -j MASQUERADE || true

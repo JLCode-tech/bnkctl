@@ -63,34 +63,39 @@ note() { printf '   %s\n' "$1"; }
 say "Discovering VPC for cluster $CLUSTER_NAME"
 VPC_ID=$(aws ec2 describe-vpcs \
     --filters "Name=tag:awsbnkctl:cluster,Values=${CLUSTER_NAME}" \
-              "Name=tag:awsbnkctl:component,Values=vpc" \
     --query "Vpcs[0].VpcId" --output text)
 [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ] && { echo "No VPC for $CLUSTER_NAME"; exit 1; }
 note "VPC: $VPC_ID"
 
-# public-2 is where the stranger lives: different subnet AND different AZ
-# from the VIP, which is what makes it a fair test.
+# public-1 / subnet-public-2 is where the stranger lives: different subnet AND
+# different AZ from the VIP, which is what makes it a fair test.
 PUB2_ID=$(aws ec2 describe-subnets \
     --filters "Name=vpc-id,Values=${VPC_ID}" \
-              "Name=tag:Name,Values=${CLUSTER_NAME}-subnet-public-2" \
+              "Name=tag:Name,Values=${CLUSTER_NAME}-public-1,${CLUSTER_NAME}-subnet-public-2" \
     --query "Subnets[0].SubnetId" --output text)
-[ "$PUB2_ID" = "None" ] && { echo "No subnet-public-2 found"; exit 1; }
+[ "$PUB2_ID" = "None" ] || [ -z "$PUB2_ID" ] && { echo "No public-1 / subnet-public-2 found"; exit 1; }
 PUB2_AZ=$(aws ec2 describe-subnets --subnet-ids "$PUB2_ID" \
     --query "Subnets[0].AvailabilityZone" --output text)
 note "stranger subnet: $PUB2_ID ($PUB2_AZ)"
 
 BNK_DATA_SG=$(aws ec2 describe-security-groups \
     --filters "Name=vpc-id,Values=${VPC_ID}" \
-              "Name=group-name,Values=${CLUSTER_NAME}-bnk-data" \
+              "Name=group-name,Values=${CLUSTER_NAME}-bnk-data,${CLUSTER_NAME}-bnk-datapath-sg" \
     --query "SecurityGroups[0].GroupId" --output text)
-[ "$BNK_DATA_SG" = "None" ] && { echo "No bnk-data SG found"; exit 1; }
+[ "$BNK_DATA_SG" = "None" ] || [ -z "$BNK_DATA_SG" ] && { echo "No bnk-data / bnk-datapath-sg found"; exit 1; }
 note "bnk-data SG: $BNK_DATA_SG"
 
 PROFILE_ARN=$(aws ec2 describe-instances \
     --filters "Name=tag:Name,Values=${CLUSTER_NAME}-jumphost" \
               "Name=instance-state-name,Values=running,stopped" \
     --query "Reservations[0].Instances[0].IamInstanceProfile.Arn" --output text)
-[ "$PROFILE_ARN" = "None" ] && { echo "No jumphost instance profile to reuse"; exit 1; }
+if [ "$PROFILE_ARN" = "None" ] || [ -z "$PROFILE_ARN" ]; then
+    PROFILE_ARN=$(aws ec2 describe-instances \
+        --filters "Name=vpc-id,Values=${VPC_ID}" \
+                  "Name=instance-state-name,Values=running" \
+        --query "Reservations[].Instances[?IamInstanceProfile.Arn!=null].IamInstanceProfile.Arn | [0]" --output text)
+fi
+[ "$PROFILE_ARN" = "None" ] || [ -z "$PROFILE_ARN" ] && { echo "No instance profile in VPC to reuse"; exit 1; }
 PROFILE_NAME="${PROFILE_ARN##*/}"
 note "reusing instance profile: $PROFILE_NAME  (nothing new to clean up in IAM)"
 

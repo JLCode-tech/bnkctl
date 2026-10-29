@@ -13,6 +13,11 @@ CLUSTER_NAME="${1:-bnk-agentcore-demo}"
 REGION="${AWS_REGION:-$(aws configure get region 2>/dev/null || echo "ap-southeast-2")}"
 export AWS_DEFAULT_REGION="$REGION"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -x "$SCRIPT_DIR/teardown-stranger.sh" ]; then
+    "$SCRIPT_DIR/teardown-stranger.sh" "$CLUSTER_NAME" || true
+fi
+
 BNK_DNS_ZONE="${BNK_DNS_ZONE:-bnk-demo.internal}"
 BNK_INGRESS_HOST="${BNK_INGRESS_HOST:-bnk-ingress.${BNK_DNS_ZONE}}"
 VIP_IP=""

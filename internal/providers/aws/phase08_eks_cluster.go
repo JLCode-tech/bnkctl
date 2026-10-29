@@ -211,11 +211,22 @@ func Phase08EKSClusterDown(ctx context.Context, cl *intent.Cluster, st *state.St
 		clusterName = cl.Metadata.Name
 	}
 
-	_, err := c.PhaseEKS.DeleteCluster(ctx, &eks.DeleteClusterInput{
-		Name: aws.String(clusterName),
-	})
-	if err != nil && !awsmw.IsNotFound(err) {
-		return fmt.Errorf("phase 08 eks cluster down: DeleteCluster %s: %w", clusterName, err)
+	deleteDeadline := time.Now().Add(EKSPollTimeout)
+	for {
+		_, err := c.PhaseEKS.DeleteCluster(ctx, &eks.DeleteClusterInput{
+			Name: aws.String(clusterName),
+		})
+		if err == nil || awsmw.IsNotFound(err) {
+			break
+		}
+		if !awsmw.IsDependencyViolation(err) || time.Now().After(deleteDeadline) {
+			return fmt.Errorf("phase 08 eks cluster down: DeleteCluster %s: %w", clusterName, err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("phase 08 eks cluster down: %w", ctx.Err())
+		case <-time.After(EKSPollInterval):
+		}
 	}
 
 	if err := waitForClusterDeleted(ctx, c, clusterName); err != nil {

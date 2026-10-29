@@ -105,7 +105,7 @@ spec:
         set static::mcp_privileged_tools [list "get_account_balance"]
         set static::mcp_privileged_token "demo-agent-token-a7f3c1"
         set static::mcp_external_token "demo-external-token-4b9e2d"
-        set static::mcp_max_reqs 30
+        set static::mcp_max_reqs 10
         array set static::mcp_rl {}
     }
     when HTTP_REQUEST {
@@ -170,7 +170,7 @@ spec:
         if { $gov_count > $static::mcp_max_reqs } {
             log local0. "BNKGOV {\"job\":\"llm-gateway\",\"model\":\"mcp:finance-tool\",\"status\":\"429\",\"latency_ms\":0,\"prompt_tk\":0,\"comp_tk\":0,\"total_tk\":0,\"cached\":0,\"cost\":0,\"userq\":\"$gov_uri\",\"client\":\"$gov_client\",\"caller\":\"$gov_caller\",\"action\":\"rate_limited\",\"req_body\":\"\",\"resp_body\":\"rate limit exceeded\",\"rpc_method\":\"$gov_method\",\"tool\":\"$gov_tool\",\"session\":\"$gov_session\",\"transport\":\"$gov_transport\"}"
             HTTP::respond 429 \
-                content "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32000,\"message\":\"rate limit exceeded: 30 requests per 60s per caller\"}}" \
+                content "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32000,\"message\":\"rate limit exceeded: 10 requests per 60s per caller\"}}" \
                 "Content-Type" "application/json" \
                 "Retry-After" "60"
             return

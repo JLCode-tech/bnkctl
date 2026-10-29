@@ -369,18 +369,29 @@ func Phase17bJumphost(ctx context.Context, cl *intent.Cluster, st *state.State, 
 	var mgmtSubnet string
 	if cl.Network.DataPath != nil {
 		targetAZ := cl.Network.DataPath.External.AZ
-		for i, s := range cl.Network.Subnets.PublicList {
+		for i, s := range cl.Network.Subnets.PrivateList {
 			if s.AZ == targetAZ {
-				mgmtSubnet = st.Get(subnetStateKey("PUBLIC_SUBNET", i))
+				mgmtSubnet = st.Get(subnetStateKey("PRIVATE_SUBNET", i))
 				break
 			}
 		}
+		if mgmtSubnet == "" {
+			for i, s := range cl.Network.Subnets.PublicList {
+				if s.AZ == targetAZ {
+					mgmtSubnet = st.Get(subnetStateKey("PUBLIC_SUBNET", i))
+					break
+				}
+			}
+		}
+	}
+	if mgmtSubnet == "" {
+		mgmtSubnet = st.Get("PRIVATE_SUBNET_0")
 	}
 	if mgmtSubnet == "" {
 		mgmtSubnet = st.Get("PUBLIC_SUBNET_0")
 	}
 	if mgmtSubnet == "" {
-		return fmt.Errorf("phase 17b jumphost: no public management subnet found in state")
+		return fmt.Errorf("phase 17b jumphost: no management subnet found in state")
 	}
 
 	var extIP string
@@ -430,14 +441,37 @@ func Phase17bJumphost(ctx context.Context, cl *intent.Cluster, st *state.State, 
 		"Name": cl.Metadata.Name + "-jumphost",
 	})
 
+	var iamProfile *ec2types.IamInstanceProfileSpecification
+	if descOut, derr := c.PhaseEC2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("vpc-id"), Values: []string{vpcID}},
+			{Name: aws.String("instance-state-name"), Values: []string{"running"}},
+		},
+	}); derr == nil && descOut != nil {
+		for _, r := range descOut.Reservations {
+			for _, inst := range r.Instances {
+				if inst.IamInstanceProfile != nil && inst.IamInstanceProfile.Arn != nil && *inst.IamInstanceProfile.Arn != "" {
+					iamProfile = &ec2types.IamInstanceProfileSpecification{
+						Arn: inst.IamInstanceProfile.Arn,
+					}
+					break
+				}
+			}
+			if iamProfile != nil {
+				break
+			}
+		}
+	}
+
 	runOut, err := c.PhaseEC2.RunInstances(ctx, &ec2.RunInstancesInput{
-		ImageId:           aws.String(amiID),
-		InstanceType:      ec2types.InstanceTypeT3Small,
-		MinCount:          aws.Int32(1),
-		MaxCount:          aws.Int32(1),
-		KeyName:           aws.String(keyName),
-		NetworkInterfaces: nics,
-		TagSpecifications: tags.ToTagSpec(ec2types.ResourceTypeInstance, t),
+		ImageId:            aws.String(amiID),
+		InstanceType:       ec2types.InstanceTypeT3Small,
+		MinCount:           aws.Int32(1),
+		MaxCount:           aws.Int32(1),
+		KeyName:            aws.String(keyName),
+		IamInstanceProfile: iamProfile,
+		NetworkInterfaces:  nics,
+		TagSpecifications:  tags.ToTagSpec(ec2types.ResourceTypeInstance, t),
 	})
 	if err != nil {
 		return fmt.Errorf("phase 17b jumphost: RunInstances: %w", err)
@@ -669,7 +703,13 @@ func Phase17bJumphostDown(ctx context.Context, cl *intent.Cluster, st *state.Sta
 
 	if c.PhaseIAM != nil {
 		roleName := st.Get("JUMPHOST_ROLE_NAME")
+		if roleName == "" && cl != nil && cl.Metadata.Name != "" {
+			roleName = cl.Metadata.Name + "-jumphost-role"
+		}
 		profName := st.Get("JUMPHOST_INSTANCE_PROFILE_NAME")
+		if profName == "" && cl != nil && cl.Metadata.Name != "" {
+			profName = cl.Metadata.Name + "-jumphost-profile"
+		}
 		if roleName != "" && profName != "" {
 			_, _ = c.PhaseIAM.RemoveRoleFromInstanceProfile(ctx, &iam.RemoveRoleFromInstanceProfileInput{
 				InstanceProfileName: aws.String(profName),

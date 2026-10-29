@@ -141,11 +141,19 @@ SERVICE_CIDR="${SERVICE_CIDR:-172.20.0.0/16}"
 BNK_NS="${BNK_NS:-f5-cne-system}"
 
 echo "Discovering BNK worker node and ENIs in VPC $VPC_ID..."
-BNK_INSTANCE_ID=$(aws ec2 describe-instances \
+BNK_INSTANCE_ID=$(aws ec2 describe-network-interfaces \
     --filters \
         "Name=vpc-id,Values=$VPC_ID" \
-        "Name=instance-state-name,Values=running" \
-    --query "Reservations[].Instances[?length(NetworkInterfaces) >= \`3\`][].InstanceId | [0]" --output text 2>/dev/null || echo "None")
+        "Name=tag:awsbnkctl:cluster,Values=$CLUSTER_NAME" \
+        "Name=tag:f5-cne-device,Values=external" \
+    --query "NetworkInterfaces[0].Attachment.InstanceId" --output text 2>/dev/null || echo "None")
+if [ -z "$BNK_INSTANCE_ID" ] || [ "$BNK_INSTANCE_ID" == "None" ]; then
+    BNK_INSTANCE_ID=$(aws ec2 describe-instances \
+        --filters \
+            "Name=vpc-id,Values=$VPC_ID" \
+            "Name=instance-state-name,Values=running" \
+        --query "Reservations[].Instances[?length(NetworkInterfaces) >= \`3\` && !contains(Tags[?Key=='Name'].Value | [0] || '', 'jumphost')][].InstanceId | [0]" --output text 2>/dev/null || echo "None")
+fi
 
 if [ -n "$BNK_INSTANCE_ID" ] && [ "$BNK_INSTANCE_ID" != "None" ]; then
     echo "Found BNK worker instance: $BNK_INSTANCE_ID"
@@ -248,7 +256,7 @@ if [ -n "$BNK_INSTANCE_ID" ] && [ "$BNK_INSTANCE_ID" != "None" ]; then
         done
     fi
 
-    # Program BNK worker node link-up (ens5/ens6) and iptables Service CIDR NAT via SSM if reachable
+    # Program BNK worker node link-up (ens5/ens6), conntrack liberal mode, and iptables Service CIDR NAT
     aws ssm send-command \
         --instance-ids "$BNK_INSTANCE_ID" \
         --document-name "AWS-RunShellScript" \
@@ -256,11 +264,31 @@ if [ -n "$BNK_INSTANCE_ID" ] && [ "$BNK_INSTANCE_ID" != "None" ]; then
           "ip link set ens5 up 2>/dev/null || true",
           "ip link set ens6 up 2>/dev/null || true",
           "sysctl -w net.ipv4.ip_forward=1",
+          "sysctl -w net.netfilter.nf_conntrack_tcp_be_liberal=1 2>/dev/null || true",
+          "iptables -C FORWARD -m conntrack --ctstate INVALID -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -m conntrack --ctstate INVALID -j ACCEPT",
           "iptables -t nat -C PREROUTING -s 10.0.10.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s 10.0.10.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES",
           "iptables -t nat -C PREROUTING -s 10.0.20.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s 10.0.20.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES",
           "iptables -t nat -C POSTROUTING -s 10.0.10.0/24 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.0.10.0/24 -j MASQUERADE",
           "iptables -t nat -C POSTROUTING -s 10.0.20.0/24 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.0.20.0/24 -j MASQUERADE"
         ]' >/dev/null 2>&1 || true
+
+    for HP_POD in $(kubectl get pods -n kube-system -l app=hugepages-setup -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+        kubectl exec -n kube-system "$HP_POD" -- nsenter -t 1 -m -u -i -n -p -- sh -c '
+            sysctl -qw net.ipv4.ip_forward=1
+            sysctl -qw net.netfilter.nf_conntrack_tcp_be_liberal=1 2>/dev/null || true
+            iptables -C FORWARD -m conntrack --ctstate INVALID -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -m conntrack --ctstate INVALID -j ACCEPT || true
+            iptables -t nat -C PREROUTING -s 10.0.10.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s 10.0.10.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES || true
+            iptables -t nat -C PREROUTING -s 10.0.20.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s 10.0.20.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES || true
+            iptables -t nat -C POSTROUTING -s 10.0.10.0/24 -d 10.0.0.0/16 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.0.10.0/24 -d 10.0.0.0/16 -j MASQUERADE || true
+            iptables -t nat -C POSTROUTING -s 10.0.20.0/24 -d 10.0.0.0/16 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.0.20.0/24 -d 10.0.0.0/16 -j MASQUERADE || true
+        ' >/dev/null 2>&1 || true
+    done
+
+    # Re-trigger F5BigFwPolicy/mcp-firewall reconciliation so f5-afm (pccd) pushes ACL blobs over 9222
+    if kubectl get f5-big-fw-policy mcp-firewall -n default >/dev/null 2>&1; then
+        kubectl annotate f5-big-fw-policy mcp-firewall -n default "bnk.f5.com/reconcile-ts=$(date +%s)" --overwrite >/dev/null 2>&1 || true
+        kubectl rollout restart deploy/f5-afm -n "${BNK_NS}" >/dev/null 2>&1 || true
+    fi
 fi
 
 # Ensure TMM ENA TSO/LRO disable in ConfigMap/tmm-init in f5-cne-system
