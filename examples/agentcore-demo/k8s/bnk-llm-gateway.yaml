@@ -8,7 +8,7 @@
 #   Step 4: 4-Object Route Bundle in f5-cne-system:
 #           Gateway + HTTPRoute (no backendRefs) + AIGatewayProfile + AppPolicy
 #   Step 5: TMM Egress & DNS in f5-cne-system:
-#           Provisioned by bnkctl (Infra/infra default route + F5BigDnsCache/aigw-dns-resolver)
+#           Provisioned by awsbnkctl (Infra/infra default route + F5BigDnsCache/aigw-dns-resolver)
 #   Step 6: CNE Controller restart check (performed by scripts/setup-llm-gateway.sh)
 #   Step 7: DSSM Governance bootstrap & f5vk_ virtual key (scripts/setup-llm-gateway.sh)
 # ==============================================================================

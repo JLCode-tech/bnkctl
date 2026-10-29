@@ -154,7 +154,9 @@ func Phase09ForgeRegisterDown(ctx context.Context, cl *intent.Cluster, st *state
 	}
 
 	purge := true
-	if cl.Forge != nil && cl.Forge.ProjectName != "" {
+	if cl.Forge != nil && cl.Forge.ProjectName != "" &&
+		cl.Forge.ProjectName != "awsbnkctl-"+cl.Metadata.Name &&
+		cl.Forge.ProjectName != "bnkctl-"+cl.Metadata.Name {
 		purge = false
 	}
 

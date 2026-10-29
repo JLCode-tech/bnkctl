@@ -20,7 +20,7 @@ type RegisterRequest struct {
 	ForgeRESTURL  string
 	WorkspaceName string // logical workspace label (used in project name)
 	WorkspaceDir  string // filesystem dir where forge_link.json lives
-	ProjectName   string // forge project name; empty → "azrbnkctl-<workspace>"
+	ProjectName   string // forge project name; empty → "<cloud>bnkctl-<workspace>"
 	ClusterName   string // EKS cluster name registered into forge
 	Region        string // AWS region
 	Kubeconfig    []byte // raw YAML for the EKS cluster
@@ -38,8 +38,8 @@ type RegisterRequest struct {
 	// Empty defaults to "dev".
 	Environment string
 
-	// ProjectType is the forge project type (e.g. "cloud-azure").
-	// Empty defaults to "cloud-azure".
+	// ProjectType is the forge project type (e.g. "cloud-aws", "cloud-azure", "cloud-gcp").
+	// Empty defaults to "cloud-" + CloudProvider.
 	ProjectType string
 
 	// CloudProvider is the cloud provider label (e.g. "aws").
@@ -93,8 +93,9 @@ func Register(ctx context.Context, c *Client, req RegisterRequest) (RegisterResu
 		return RegisterResult{}, errors.New("forge.Register: kubeconfig is empty")
 	}
 
+	cloudProv := normalizeCloudProvider(req.CloudProvider, req.ProjectType)
 	if req.ProjectName == "" {
-		req.ProjectName = defaultProjectName(req.WorkspaceName)
+		req.ProjectName = defaultProjectNameForCloud(cloudProv, req.WorkspaceName)
 	}
 	if req.AWSProfile == "" {
 		req.AWSProfile = os.Getenv("AWS_PROFILE")
@@ -130,14 +131,11 @@ func Register(ctx context.Context, c *Client, req RegisterRequest) (RegisterResu
 	if env == "" {
 		env = "dev"
 	}
-	cloudProv := req.CloudProvider
-	if cloudProv == "" {
-		cloudProv = "aws"
-	}
 	projType := req.ProjectType
 	if projType == "" {
 		projType = "cloud-" + cloudProv
 	}
+	toolName := cliToolNameForCloud(cloudProv)
 
 	var projectID int
 	var projectName string
@@ -150,7 +148,7 @@ func Register(ctx context.Context, c *Client, req RegisterRequest) (RegisterResu
 		Region:               req.Region,
 		AWSProfile:           sendableAWSProfile(req.AWSProfile),
 		Environment:          env,
-		Description:          fmt.Sprintf("Created by bnkctl for workspace %q", req.WorkspaceName),
+		Description:          fmt.Sprintf("Created by %s for workspace %q", toolName, req.WorkspaceName),
 		CredentialTemplateID: req.CredentialTemplateID,
 	})
 	if err != nil {

@@ -924,27 +924,43 @@ func newForgeCmd(flags *GlobalFlags) *cobra.Command {
 			}
 			effMCPURL := mcpURL
 			effRESTURL := restURL
-			if cl != nil && cl.Forge != nil {
-				if effMCPURL == "" && cl.Forge.MCPURL != "" {
-					effMCPURL = cl.Forge.MCPURL
-				}
-				if effRESTURL == "" {
-					effRESTURL = cl.Forge.ResolveURL()
+			effProjectName := projectName
+			effEnv := envName
+			var credTemplateID int
+			var awsProfile string
+			if cl != nil {
+				awsProfile = cl.Metadata.Profile
+				if cl.Forge != nil {
+					if effMCPURL == "" && cl.Forge.MCPURL != "" {
+						effMCPURL = cl.Forge.MCPURL
+					}
+					if effRESTURL == "" {
+						effRESTURL = cl.Forge.ResolveURL()
+					}
+					if effProjectName == "" && cl.Forge.ProjectName != "" {
+						effProjectName = cl.Forge.ProjectName
+					}
+					if !cmd.Flags().Changed("environment") && cl.Forge.Environment != "" {
+						effEnv = cl.Forge.Environment
+					}
+					credTemplateID = cl.Forge.CredentialTemplateID
 				}
 			}
 			client := forge.NewClient(effMCPURL)
 			res, err := forge.Register(cmd.Context(), client, forge.RegisterRequest{
-				ForgeRESTURL:     effRESTURL,
-				WorkspaceName:    cl.EffectiveName(),
-				WorkspaceDir:     wsDir,
-				ProjectName:      projectName,
-				ClusterName:      cl.EffectiveName(),
-				Region:           cl.EffectiveRegion(),
-				Kubeconfig:       kcBytes,
-				Environment:      envName,
-				ProjectType:      "cloud-" + string(p.Name()),
-				CloudProvider:    string(p.Name()),
-				PostRegisterScan: postScan,
+				ForgeRESTURL:         effRESTURL,
+				WorkspaceName:        cl.EffectiveName(),
+				WorkspaceDir:         wsDir,
+				ProjectName:          effProjectName,
+				ClusterName:          cl.EffectiveName(),
+				Region:               cl.EffectiveRegion(),
+				Kubeconfig:           kcBytes,
+				AWSProfile:           awsProfile,
+				Environment:          effEnv,
+				ProjectType:          "cloud-" + string(p.Name()),
+				CloudProvider:        string(p.Name()),
+				CredentialTemplateID: credTemplateID,
+				PostRegisterScan:     postScan,
 			})
 			if err != nil {
 				return err
@@ -1228,6 +1244,9 @@ func newForgeCmd(flags *GlobalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if !cmd.Flags().Changed("namespace") && cl != nil && cl.EffectiveProvider() == intent.ProviderAWS {
+				remNamespace = "f5-cne-system"
+			}
 			if flags.DryRun {
 				fmt.Fprintf(cmd.OutOrStdout(), "[dry-run] forge governance remediate action=%s namespace=%s target=%s cluster=%s\n", action, remNamespace, remTargetName, cl.EffectiveName())
 				return nil
@@ -1283,6 +1302,9 @@ func newForgeCmd(flags *GlobalFlags) *cobra.Command {
 			effModelID := probeModelID
 			if effModelID == "" {
 				effModelID = probeModel
+			}
+			if !cmd.Flags().Changed("namespace") && cl != nil && cl.EffectiveProvider() == intent.ProviderAWS {
+				probeNamespace = "f5-cne-system"
 			}
 			if flags.DryRun {
 				fmt.Fprintf(cmd.OutOrStdout(), "[dry-run] forge governance test-request route=%s namespace=%s gateway-ip=%s port=%d path=%s model=%s\n",

@@ -65,6 +65,9 @@ forge:
   enabled: true
   url: http://localhost:8000
   mcpUrl: http://localhost:8081/mcp/
+  projectName: awsbnkctl-agentcore-syd-v2
+  projectType: cloud-aws
+  cloudProvider: aws
   credentialTemplateId: 1
   username: admin
 

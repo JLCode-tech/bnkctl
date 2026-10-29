@@ -73,6 +73,9 @@ forge:
   enabled: true
   url: http://localhost:8000
   mcpUrl: http://localhost:8081/mcp/
+  projectName: awsbnkctl-bnk-agentcore-demo
+  projectType: cloud-aws
+  cloudProvider: aws
   credentialTemplateId: 1
   username: admin
   # password: set AWSBNKCTL_FORGE_PASSWORD instead of writing it here

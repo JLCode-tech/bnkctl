@@ -109,6 +109,29 @@ func TestForgeREST_FullLifecycle(t *testing.T) {
 		}
 	})
 
+	t.Run("default project name and cloud labels for AWS", func(t *testing.T) {
+		awsDir := filepath.Join(tmpDir, ".awsbnkctl", "aws-cluster")
+		_ = os.MkdirAll(awsDir, 0o750)
+		awsReq := forge.RegisterRequest{
+			WorkspaceName: "aws-cluster",
+			WorkspaceDir:  awsDir,
+			ClusterName:   "aws-cluster",
+			Region:        "ap-southeast-2",
+			CloudProvider: "aws",
+			Kubeconfig:    []byte("test-kubeconfig"),
+		}
+		res, err := forge.RegisterREST(context.Background(), srv.URL, awsReq, creds)
+		if err != nil {
+			t.Fatalf("RegisterREST AWS: %v", err)
+		}
+		if res.Link == nil || res.Link.ProjectName != "awsbnkctl-aws-cluster" {
+			t.Fatalf("expected ProjectName awsbnkctl-aws-cluster, got %+v", res.Link)
+		}
+		if _, ok := projects["awsbnkctl-aws-cluster"]; !ok {
+			t.Errorf("expected server to receive project name awsbnkctl-aws-cluster, got projects=%v", projects)
+		}
+	})
+
 	_ = clusterList
 }
 

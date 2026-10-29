@@ -83,7 +83,7 @@ sed \
   -e "s|172.20.0.10|${KUBE_DNS_IP}|g" \
   "${DEMO_DIR}/k8s/bnk-llm-gateway.yaml" | kubectl apply -f -
 
-# Step 6: Restart CNE Controller in f5-bnk to pick up net-resolver DNS + AIGatewayProfile
+# Step 6: Restart CNE Controller in f5-cne-system to pick up net-resolver DNS + AIGatewayProfile
 PROG_STATUS="$(kubectl get aigatewayprofiles.inference.k8s.f5.com "${ROUTE_NAME}" -n "${BNK_NS}" \
   -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null || true)"
 if [ "${PROG_STATUS}" != "True" ]; then

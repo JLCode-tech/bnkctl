@@ -554,8 +554,8 @@ func ResolveClusterIDByName(ctx context.Context, restURL, clusterName string, cr
 	}
 
 	candidates := []string{
-		defaultProjectName(clusterName),
 		"awsbnkctl-" + clusterName,
+		"azrbnkctl-" + clusterName,
 		"gkebnkctl-" + clusterName,
 		"bnkctl-" + clusterName,
 		clusterName,

@@ -103,7 +103,7 @@ func RegisterREST(ctx context.Context, restURL string, req RegisterRequest, cred
 		return RegisterResult{}, fmt.Errorf("forge.RegisterREST: kubeconfig is empty")
 	}
 	if req.ProjectName == "" {
-		req.ProjectName = defaultProjectName(req.WorkspaceName)
+		req.ProjectName = defaultProjectNameForCloud(req.CloudProvider, req.WorkspaceName)
 	}
 
 	base := resolveRESTBaseURL(restURL)
@@ -177,8 +177,8 @@ func UnregisterRESTByName(ctx context.Context, restURL, clusterName string, cred
 	}
 
 	candidates := []string{
-		defaultProjectName(clusterName),
 		"awsbnkctl-" + clusterName,
+		"azrbnkctl-" + clusterName,
 		"gkebnkctl-" + clusterName,
 		"bnkctl-" + clusterName,
 		clusterName,
@@ -225,8 +225,39 @@ func UnregisterRESTByName(ctx context.Context, restURL, clusterName string, cred
 	return nil
 }
 
+func normalizeCloudProvider(cloudProvider, projectType string) string {
+	cp := strings.ToLower(strings.TrimSpace(cloudProvider))
+	cp = strings.TrimPrefix(cp, "cloud-")
+	if cp == "" {
+		pt := strings.ToLower(strings.TrimSpace(projectType))
+		pt = strings.TrimPrefix(pt, "cloud-")
+		if pt == "aws" || pt == "azure" || pt == "gcp" {
+			cp = pt
+		}
+	}
+	if cp == "" {
+		cp = "aws"
+	}
+	return cp
+}
+
+func cliToolNameForCloud(cloudProvider string) string {
+	switch normalizeCloudProvider(cloudProvider, "") {
+	case "azure":
+		return "azrbnkctl"
+	case "gcp":
+		return "gkebnkctl"
+	default:
+		return "awsbnkctl"
+	}
+}
+
+func defaultProjectNameForCloud(cloudProvider, workspace string) string {
+	return cliToolNameForCloud(cloudProvider) + "-" + workspace
+}
+
 func defaultProjectName(workspace string) string {
-	return "azrbnkctl-" + workspace
+	return defaultProjectNameForCloud("aws", workspace)
 }
 
 // IsMCPCatalogGapErr detects when FastMCP lacks create_project / create_cluster tools.
@@ -272,25 +303,23 @@ type restProject struct {
 }
 
 func restCreateProject(ctx context.Context, base, token string, req RegisterRequest) (restProject, error) {
+	cloudProvider := normalizeCloudProvider(req.CloudProvider, req.ProjectType)
 	projectType := req.ProjectType
 	if projectType == "" {
-		projectType = "cloud-azure"
-	}
-	cloudProvider := req.CloudProvider
-	if cloudProvider == "" {
-		cloudProvider = "azure"
+		projectType = "cloud-" + cloudProvider
 	}
 	env := req.Environment
 	if env == "" {
 		env = "dev"
 	}
+	toolName := cliToolNameForCloud(cloudProvider)
 	body := map[string]any{
 		"name":           req.ProjectName,
 		"project_type":   projectType,
 		"cloud_provider": cloudProvider,
 		"region":         req.Region,
 		"environment":    env,
-		"description":    fmt.Sprintf("Created by azrbnkctl for workspace %q", req.WorkspaceName),
+		"description":    fmt.Sprintf("Created by %s for workspace %q", toolName, req.WorkspaceName),
 	}
 	if req.CredentialTemplateID > 0 {
 		body["credential_template_id"] = req.CredentialTemplateID
@@ -365,10 +394,7 @@ type restCluster struct {
 
 func restCreateCluster(ctx context.Context, base, token string, projectID int, req RegisterRequest) (restCluster, error) {
 	encodedKubeconfig := base64.StdEncoding.EncodeToString(req.Kubeconfig)
-	cloudProvider := req.CloudProvider
-	if cloudProvider == "" {
-		cloudProvider = "azure"
-	}
+	cloudProvider := normalizeCloudProvider(req.CloudProvider, req.ProjectType)
 	body := map[string]any{
 		"name":           req.ClusterName,
 		"cloud_provider": cloudProvider,
