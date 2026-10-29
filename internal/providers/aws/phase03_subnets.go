@@ -189,6 +189,7 @@ func Phase03Subnets(ctx context.Context, cl *intent.Cluster, st *state.State, c 
 		extra := map[string]string{
 			clusterTag:               "shared",
 			"kubernetes.io/role/elb": "1",
+			"awsbnkctl:component":    "subnet-public",
 		}
 		id, err := ensureSubnet(ctx, c, st, cl, vpcID, key, name, spec, true, extra)
 		if err != nil {
@@ -208,6 +209,7 @@ func Phase03Subnets(ctx context.Context, cl *intent.Cluster, st *state.State, c 
 		extra := map[string]string{
 			clusterTag:                        "shared",
 			"kubernetes.io/role/internal-elb": "1",
+			"awsbnkctl:component":             "subnet-private",
 		}
 		if _, err := ensureSubnet(ctx, c, st, cl, vpcID, key, name, spec, false, extra); err != nil {
 			return fmt.Errorf("phase 03 subnets: %w", err)
@@ -218,6 +220,7 @@ func Phase03Subnets(ctx context.Context, cl *intent.Cluster, st *state.State, c 
 		name := cl.Metadata.Name + "-bnk-ext"
 		extra := map[string]string{
 			"bnk.f5.com/datapath": "external",
+			"awsbnkctl:component": "subnet-bnk-ext",
 		}
 		if _, err := ensureSubnet(ctx, c, st, cl, vpcID, "BNK_EXT_SUBNET", name, cl.Network.DataPath.External, false, extra); err != nil {
 			return fmt.Errorf("phase 03 subnets: %w", err)
@@ -228,6 +231,7 @@ func Phase03Subnets(ctx context.Context, cl *intent.Cluster, st *state.State, c 
 		name := cl.Metadata.Name + "-bnk-int"
 		extra := map[string]string{
 			"bnk.f5.com/datapath": "internal",
+			"awsbnkctl:component": "subnet-bnk-int",
 		}
 		if _, err := ensureSubnet(ctx, c, st, cl, vpcID, "BNK_INT_SUBNET", name, cl.Network.DataPath.Internal, false, extra); err != nil {
 			return fmt.Errorf("phase 03 subnets: %w", err)

@@ -78,15 +78,29 @@ note "VPC: $VPC_ID"
 EXT_AZ=$(aws ec2 describe-subnets \
     --filters "Name=vpc-id,Values=${VPC_ID}" \
               "Name=tag:awsbnkctl:cluster,Values=${CLUSTER_NAME}" \
-              "Name=tag:awsbnkctl:component,Values=subnet-bnk-ext" \
+              "Name=tag:bnk.f5.com/datapath,Values=external" \
     --query "Subnets[0].AvailabilityZone" --output text 2>/dev/null || echo "")
+if [ -z "$EXT_AZ" ] || [ "$EXT_AZ" = "None" ]; then
+    EXT_AZ=$(aws ec2 describe-subnets \
+        --filters "Name=vpc-id,Values=${VPC_ID}" \
+                  "Name=tag:awsbnkctl:cluster,Values=${CLUSTER_NAME}" \
+                  "Name=tag:awsbnkctl:component,Values=subnet-bnk-ext" \
+        --query "Subnets[0].AvailabilityZone" --output text 2>/dev/null || echo "")
+fi
 PUB2_ID=""
 if [ -n "$EXT_AZ" ] && [ "$EXT_AZ" != "None" ]; then
     PUB2_ID=$(aws ec2 describe-subnets \
         --filters "Name=vpc-id,Values=${VPC_ID}" \
                   "Name=tag:awsbnkctl:cluster,Values=${CLUSTER_NAME}" \
-                  "Name=tag:awsbnkctl:component,Values=subnet-public" \
+                  "Name=tag:kubernetes.io/role/elb,Values=1" \
         --query "Subnets[?AvailabilityZone!='${EXT_AZ}'].SubnetId | [0]" --output text 2>/dev/null || echo "")
+    if [ -z "$PUB2_ID" ] || [ "$PUB2_ID" = "None" ]; then
+        PUB2_ID=$(aws ec2 describe-subnets \
+            --filters "Name=vpc-id,Values=${VPC_ID}" \
+                      "Name=tag:awsbnkctl:cluster,Values=${CLUSTER_NAME}" \
+                      "Name=tag:awsbnkctl:component,Values=subnet-public" \
+            --query "Subnets[?AvailabilityZone!='${EXT_AZ}'].SubnetId | [0]" --output text 2>/dev/null || echo "")
+    fi
 fi
 if [ -z "$PUB2_ID" ] || [ "$PUB2_ID" = "None" ]; then
     PUB2_ID=$(aws ec2 describe-subnets \
