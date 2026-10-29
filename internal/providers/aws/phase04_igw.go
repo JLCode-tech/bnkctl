@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/JLCode-tech/bnkctl/internal/providers/aws/awsmw"
 	"github.com/JLCode-tech/bnkctl/internal/providers/aws/tags"
@@ -107,6 +108,17 @@ func Phase04IGWDown(ctx context.Context, cl *intent.Cluster, st *state.State, c 
 			InternetGatewayId: aws.String(igwID),
 			VpcId:             aws.String(vpcID),
 		})
+		if err != nil && awsmw.IsDependencyViolation(err) {
+			sweepVPCInstancesAndENIs(ctx, c, vpcID)
+			_, err = c.PhaseEC2.DetachInternetGateway(ctx, &ec2.DetachInternetGatewayInput{
+				InternetGatewayId: aws.String(igwID),
+				VpcId:             aws.String(vpcID),
+			})
+			if err != nil && awsmw.IsDependencyViolation(err) {
+				fmt.Fprintf(os.Stderr, "phase 04 igw down: warning: IGW %s on %s still has mapped public dependencies (%v); deferring to VPC blocker sweep\n", igwID, vpcID, err)
+				return nil
+			}
+		}
 		if err != nil && !awsmw.IsNotFound(err) {
 			return fmt.Errorf("phase 04 igw down: DetachInternetGateway %s from %s: %w", igwID, vpcID, err)
 		}
@@ -115,6 +127,10 @@ func Phase04IGWDown(ctx context.Context, cl *intent.Cluster, st *state.State, c 
 	_, err := c.PhaseEC2.DeleteInternetGateway(ctx, &ec2.DeleteInternetGatewayInput{
 		InternetGatewayId: aws.String(igwID),
 	})
+	if err != nil && awsmw.IsDependencyViolation(err) {
+		fmt.Fprintf(os.Stderr, "phase 04 igw down: warning: IGW %s still has dependencies (%v); deferring to VPC blocker sweep\n", igwID, err)
+		return nil
+	}
 	if err != nil && !awsmw.IsNotFound(err) {
 		return fmt.Errorf("phase 04 igw down: DeleteInternetGateway %s: %w", igwID, err)
 	}

@@ -134,7 +134,7 @@ spec:
         if { $gov_bearer eq $static::mcp_external_token } { set gov_caller "external" }
 
         set gov_key $gov_caller
-        if { $gov_caller eq "anonymous" } { set gov_key "ip:$gov_client" }
+        if { $gov_session ne "" } { set gov_key "${gov_key}:${gov_session}" }
 
         set gov_mcp 0
         if { [HTTP::path] starts_with "/v1/mcp/forecast" } { set gov_mcp 1 }
@@ -142,38 +142,40 @@ spec:
         if { [HTTP::path] equals "/" } { set gov_mcp 1 }
         if { $gov_mcp == 0 } { return }
 
-        set cur_window [expr {[clock seconds] / 60}]
-        set win_key "${gov_key}:${cur_window}"
-        set gov_count 1
-        if { [catch {
-            set cur [table lookup -subtable "mcp_rl" $win_key]
-            if { $cur eq "" } {
-                table set -subtable "mcp_rl" $win_key 1 120 120
-                set gov_count 1
-            } else {
-                set gov_count [expr {$cur + 1}]
-                table set -subtable "mcp_rl" $win_key $gov_count 120 120
-            }
-        }] } {
-            if { [info exists static::mcp_rl($win_key)] } {
-                incr static::mcp_rl($win_key)
-                set gov_count $static::mcp_rl($win_key)
-            } else {
-                if { [array size static::mcp_rl] > 256 } {
-                    array unset static::mcp_rl
+        if { $gov_caller ne "anonymous" } {
+            set cur_window [expr {[clock seconds] / 60}]
+            set win_key "${gov_key}:${cur_window}"
+            set gov_count 1
+            if { [catch {
+                set cur [table lookup -subtable "mcp_rl" $win_key]
+                if { $cur eq "" } {
+                    table set -subtable "mcp_rl" $win_key 1 120 120
+                    set gov_count 1
+                } else {
+                    set gov_count [expr {$cur + 1}]
+                    table set -subtable "mcp_rl" $win_key $gov_count 120 120
                 }
-                set static::mcp_rl($win_key) 1
-                set gov_count 1
+            }] } {
+                if { [info exists static::mcp_rl($win_key)] } {
+                    incr static::mcp_rl($win_key)
+                    set gov_count $static::mcp_rl($win_key)
+                } else {
+                    if { [array size static::mcp_rl] > 256 } {
+                        array unset static::mcp_rl
+                    }
+                    set static::mcp_rl($win_key) 1
+                    set gov_count 1
+                }
             }
-        }
 
-        if { $gov_count > $static::mcp_max_reqs } {
-            log local0. "BNKGOV {\"job\":\"llm-gateway\",\"model\":\"mcp:finance-tool\",\"status\":\"429\",\"latency_ms\":0,\"prompt_tk\":0,\"comp_tk\":0,\"total_tk\":0,\"cached\":0,\"cost\":0,\"userq\":\"$gov_uri\",\"client\":\"$gov_client\",\"caller\":\"$gov_caller\",\"action\":\"rate_limited\",\"req_body\":\"\",\"resp_body\":\"rate limit exceeded\",\"rpc_method\":\"$gov_method\",\"tool\":\"$gov_tool\",\"session\":\"$gov_session\",\"transport\":\"$gov_transport\"}"
-            HTTP::respond 429 \
-                content "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32000,\"message\":\"rate limit exceeded: 10 requests per 60s per caller\"}}" \
-                "Content-Type" "application/json" \
-                "Retry-After" "60"
-            return
+            if { $gov_count > $static::mcp_max_reqs } {
+                log local0. "BNKGOV {\"job\":\"llm-gateway\",\"model\":\"mcp:finance-tool\",\"status\":\"429\",\"latency_ms\":0,\"prompt_tk\":0,\"comp_tk\":0,\"total_tk\":0,\"cached\":0,\"cost\":0,\"userq\":\"$gov_uri\",\"client\":\"$gov_client\",\"caller\":\"$gov_caller\",\"action\":\"rate_limited\",\"req_body\":\"\",\"resp_body\":\"rate limit exceeded\",\"rpc_method\":\"$gov_method\",\"tool\":\"$gov_tool\",\"session\":\"$gov_session\",\"transport\":\"$gov_transport\"}"
+                HTTP::respond 429 \
+                    content "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32000,\"message\":\"rate limit exceeded: 10 requests per 60s per caller\"}}" \
+                    "Content-Type" "application/json" \
+                    "Retry-After" "60"
+                return
+            }
         }
 
         if { [HTTP::header exists "Content-Length"] } {

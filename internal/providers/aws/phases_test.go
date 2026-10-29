@@ -20,6 +20,8 @@ import (
 	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/smithy-go"
 	corev1 "k8s.io/api/core/v1"
@@ -1102,7 +1104,20 @@ func (f *hardeningFakeEC2) DeleteInstanceConnectEndpoint(_ context.Context, in *
 	return &ec2.DeleteInstanceConnectEndpointOutput{}, nil
 }
 
-func (f *hardeningFakeEC2) DescribeNetworkInterfaces(_ context.Context, _ *ec2.DescribeNetworkInterfacesInput, _ ...func(*ec2.Options)) (*ec2.DescribeNetworkInterfacesOutput, error) {
+func (f *hardeningFakeEC2) DescribeNetworkInterfaces(_ context.Context, in *ec2.DescribeNetworkInterfacesInput, _ ...func(*ec2.Options)) (*ec2.DescribeNetworkInterfacesOutput, error) {
+	if in != nil && len(in.NetworkInterfaceIds) > 0 {
+		want := make(map[string]bool, len(in.NetworkInterfaceIds))
+		for _, id := range in.NetworkInterfaceIds {
+			want[id] = true
+		}
+		var matched []ec2types.NetworkInterface
+		for _, eni := range f.enis {
+			if want[aws.ToString(eni.NetworkInterfaceId)] {
+				matched = append(matched, eni)
+			}
+		}
+		return &ec2.DescribeNetworkInterfacesOutput{NetworkInterfaces: matched}, nil
+	}
 	return &ec2.DescribeNetworkInterfacesOutput{NetworkInterfaces: f.enis}, nil
 }
 
@@ -1638,5 +1653,344 @@ func TestPhase17bJumphostDown_TagDiscoveryAndMissingVPCID(t *testing.T) {
 		ec2Fake.revokedIngressGroupIDs[0] != "sg-jumphost" ||
 		ec2Fake.revokedIngressGroupIDs[1] != "sg-eks-node" {
 		t.Errorf("expected ingress revocations [sg-jumphost, sg-eks-node], got %v", ec2Fake.revokedIngressGroupIDs)
+	}
+}
+
+type strangerSweepFakeEC2 struct {
+	hardeningFakeEC2
+	instances             []ec2types.Instance
+	terminatedInstanceIDs []string
+	detachedAttachmentIDs []string
+	detachIGWFailuresLeft int
+	lastRunInstancesInput *ec2.RunInstancesInput
+}
+
+func (f *strangerSweepFakeEC2) DescribeInstances(_ context.Context, _ *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+	return &ec2.DescribeInstancesOutput{
+		Reservations: []ec2types.Reservation{
+			{Instances: f.instances},
+		},
+	}, nil
+}
+
+func (f *strangerSweepFakeEC2) TerminateInstances(_ context.Context, in *ec2.TerminateInstancesInput, _ ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error) {
+	f.terminatedInstanceIDs = append(f.terminatedInstanceIDs, in.InstanceIds...)
+	for i := range f.instances {
+		f.instances[i].State = &ec2types.InstanceState{Name: ec2types.InstanceStateNameTerminated}
+	}
+	return &ec2.TerminateInstancesOutput{}, nil
+}
+
+func (f *strangerSweepFakeEC2) DetachNetworkInterface(_ context.Context, in *ec2.DetachNetworkInterfaceInput, _ ...func(*ec2.Options)) (*ec2.DetachNetworkInterfaceOutput, error) {
+	f.detachedAttachmentIDs = append(f.detachedAttachmentIDs, aws.ToString(in.AttachmentId))
+	for i := range f.enis {
+		if f.enis[i].Attachment != nil && aws.ToString(f.enis[i].Attachment.AttachmentId) == aws.ToString(in.AttachmentId) {
+			f.enis[i].Status = ec2types.NetworkInterfaceStatusAvailable
+		}
+	}
+	return &ec2.DetachNetworkInterfaceOutput{}, nil
+}
+
+func (f *strangerSweepFakeEC2) DetachInternetGateway(_ context.Context, in *ec2.DetachInternetGatewayInput, _ ...func(*ec2.Options)) (*ec2.DetachInternetGatewayOutput, error) {
+	if f.detachIGWFailuresLeft > 0 {
+		f.detachIGWFailuresLeft--
+		return nil, fakeDepViolationErr{}
+	}
+	f.detachedIGWs = append(f.detachedIGWs, aws.ToString(in.InternetGatewayId))
+	return &ec2.DetachInternetGatewayOutput{}, nil
+}
+
+func (f *strangerSweepFakeEC2) DescribeKeyPairs(_ context.Context, _ *ec2.DescribeKeyPairsInput, _ ...func(*ec2.Options)) (*ec2.DescribeKeyPairsOutput, error) {
+	return &ec2.DescribeKeyPairsOutput{}, nil
+}
+
+func (f *strangerSweepFakeEC2) CreateKeyPair(_ context.Context, in *ec2.CreateKeyPairInput, _ ...func(*ec2.Options)) (*ec2.CreateKeyPairOutput, error) {
+	return &ec2.CreateKeyPairOutput{
+		KeyName:     in.KeyName,
+		KeyMaterial: aws.String("-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n"),
+	}, nil
+}
+
+func (f *strangerSweepFakeEC2) RunInstances(_ context.Context, in *ec2.RunInstancesInput, _ ...func(*ec2.Options)) (*ec2.RunInstancesOutput, error) {
+	f.lastRunInstancesInput = in
+	inst := ec2types.Instance{
+		InstanceId: aws.String("i-jumphost-new"),
+		State:      &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
+	}
+	f.instances = append(f.instances, inst)
+	return &ec2.RunInstancesOutput{
+		Instances: []ec2types.Instance{inst},
+	}, nil
+}
+
+func (f *strangerSweepFakeEC2) CreateInstanceConnectEndpoint(_ context.Context, _ *ec2.CreateInstanceConnectEndpointInput, _ ...func(*ec2.Options)) (*ec2.CreateInstanceConnectEndpointOutput, error) {
+	ep := ec2types.Ec2InstanceConnectEndpoint{
+		InstanceConnectEndpointId: aws.String("eice-new"),
+		State:                     ec2types.Ec2InstanceConnectEndpointStateCreateComplete,
+	}
+	f.eices = append(f.eices, ep)
+	return &ec2.CreateInstanceConnectEndpointOutput{
+		InstanceConnectEndpoint: &ep,
+	}, nil
+}
+
+func TestPhase04IGWDownAndPhase02VPCDown_SweepsStrangerInstanceAndSecondaryENIs(t *testing.T) {
+	origPoll := VPCSweepRetryInterval
+	origJHPoll := JumphostPollInterval
+	origENIPoll := ENIDetachPollInterval
+	VPCSweepRetryInterval = time.Millisecond
+	JumphostPollInterval = time.Millisecond
+	ENIDetachPollInterval = time.Millisecond
+	defer func() {
+		VPCSweepRetryInterval = origPoll
+		JumphostPollInterval = origJHPoll
+		ENIDetachPollInterval = origENIPoll
+	}()
+
+	ctx := context.Background()
+	st, err := state.Load(filepath.Join(t.TempDir(), "state.env"))
+	if err != nil {
+		t.Fatalf("state.Load: %v", err)
+	}
+	st.Set("VPC_ID", "vpc-demo")
+	st.Set("IGW_ID", "igw-demo")
+
+	cl := &intent.Cluster{
+		Metadata: intent.Metadata{Name: "bnk-agentcore-demo", Region: "ap-southeast-2"},
+	}
+
+	ec2Fake := &strangerSweepFakeEC2{
+		hardeningFakeEC2: hardeningFakeEC2{
+			vpcs: []ec2types.Vpc{{VpcId: aws.String("vpc-demo")}},
+			enis: []ec2types.NetworkInterface{
+				{
+					NetworkInterfaceId: aws.String("eni-primary-eth0"),
+					Status:             ec2types.NetworkInterfaceStatusInUse,
+					Attachment: &ec2types.NetworkInterfaceAttachment{
+						AttachmentId: aws.String("eni-attach-eth0"),
+						DeviceIndex:  aws.Int32(0),
+					},
+				},
+				{
+					NetworkInterfaceId: aws.String("eni-stranger-eth1"),
+					Status:             ec2types.NetworkInterfaceStatusInUse,
+					Attachment: &ec2types.NetworkInterfaceAttachment{
+						AttachmentId: aws.String("eni-attach-eth1"),
+						DeviceIndex:  aws.Int32(1),
+					},
+				},
+			},
+		},
+		instances: []ec2types.Instance{
+			{
+				InstanceId: aws.String("i-stranger"),
+				State:      &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
+			},
+		},
+		detachIGWFailuresLeft: 1, // First DetachInternetGateway fails with DependencyViolation (mapped public IP on stranger eth0)
+	}
+
+	clients := &Clients{Region: "ap-southeast-2", PhaseEC2: ec2Fake}
+	if err := Phase04IGWDown(ctx, cl, st, clients, false); err != nil {
+		t.Fatalf("Phase04IGWDown failed: %v", err)
+	}
+
+	if len(ec2Fake.terminatedInstanceIDs) != 1 || ec2Fake.terminatedInstanceIDs[0] != "i-stranger" {
+		t.Errorf("expected stranger instance i-stranger to be terminated during Phase04IGWDown sweep, got %v", ec2Fake.terminatedInstanceIDs)
+	}
+	if len(ec2Fake.detachedAttachmentIDs) != 1 || ec2Fake.detachedAttachmentIDs[0] != "eni-attach-eth1" {
+		t.Errorf("expected only non-primary ENI attachment eni-attach-eth1 to be force-detached, got %v", ec2Fake.detachedAttachmentIDs)
+	}
+	if len(ec2Fake.detachedIGWs) != 1 || ec2Fake.detachedIGWs[0] != "igw-demo" {
+		t.Errorf("expected igw-demo to be detached after instance/ENI sweep, got %v", ec2Fake.detachedIGWs)
+	}
+	if st.Get("IGW_ID") != "" {
+		t.Errorf("expected IGW_ID to be cleared from state")
+	}
+}
+
+type retryDeleteClusterFakeEKS struct {
+	fakePhaseEKS
+	deleteFailuresLeft int
+	deleteAttempts     int
+}
+
+func (f *retryDeleteClusterFakeEKS) DeleteCluster(_ context.Context, _ *eks.DeleteClusterInput, _ ...func(*eks.Options)) (*eks.DeleteClusterOutput, error) {
+	f.deleteAttempts++
+	if f.deleteFailuresLeft > 0 {
+		f.deleteFailuresLeft--
+		return nil, fakeDepViolationErr{}
+	}
+	f.clusterCreated = false
+	return &eks.DeleteClusterOutput{}, nil
+}
+
+func TestPhase08EKSClusterDown_RetriesOnDependencyViolation(t *testing.T) {
+	origPoll := EKSPollInterval
+	EKSPollInterval = time.Millisecond
+	defer func() { EKSPollInterval = origPoll }()
+
+	ctx := context.Background()
+	st, err := state.Load(filepath.Join(t.TempDir(), "state.env"))
+	if err != nil {
+		t.Fatalf("state.Load: %v", err)
+	}
+	st.Set("EKS_CLUSTER_NAME", "retry-eks")
+
+	cl := &intent.Cluster{
+		Metadata: intent.Metadata{Name: "retry-eks", Region: "ap-southeast-2"},
+	}
+	eksFake := &retryDeleteClusterFakeEKS{
+		fakePhaseEKS:       fakePhaseEKS{clusterCreated: true},
+		deleteFailuresLeft: 2,
+	}
+	clients := &Clients{Region: "ap-southeast-2", PhaseEKS: eksFake}
+
+	if err := Phase08EKSClusterDown(ctx, cl, st, clients, false); err != nil {
+		t.Fatalf("Phase08EKSClusterDown failed: %v", err)
+	}
+	if eksFake.deleteAttempts != 3 {
+		t.Errorf("expected 3 DeleteCluster attempts, got %d", eksFake.deleteAttempts)
+	}
+}
+
+type fakePhaseSSM struct{}
+
+func (f *fakePhaseSSM) GetParameter(_ context.Context, _ *ssm.GetParameterInput, _ ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
+	return &ssm.GetParameterOutput{
+		Parameter: &ssmtypes.Parameter{
+			Value: aws.String("ami-0al2023fake"),
+		},
+	}, nil
+}
+
+func TestPhase17bJumphost_PrefersPrivateSubnetAndAttachesDiscoveredIAMProfile(t *testing.T) {
+	origJHPoll := JumphostPollInterval
+	origEICEPoll := EICEPollInterval
+	JumphostPollInterval = time.Millisecond
+	EICEPollInterval = time.Millisecond
+	defer func() {
+		JumphostPollInterval = origJHPoll
+		EICEPollInterval = origEICEPoll
+	}()
+
+	ctx := context.Background()
+	st, err := state.Load(filepath.Join(t.TempDir(), "state.env"))
+	if err != nil {
+		t.Fatalf("state.Load: %v", err)
+	}
+	st.Set("VPC_ID", "vpc-jh")
+	st.Set("PUBLIC_SUBNET_0", "subnet-pub-0")
+	st.Set("PRIVATE_SUBNET_0", "subnet-priv-0")
+	st.Set("BNK_EXT_SUBNET", "subnet-ext-0")
+	st.Set("BNK_INT_SUBNET", "subnet-int-0")
+
+	cl := &intent.Cluster{
+		Metadata: intent.Metadata{Name: "jh-priv-test", Region: "ap-southeast-2"},
+		Pattern:  intent.PatternDualInterface,
+		Network: intent.Network{
+			VPCCidr: "10.0.0.0/16",
+			Subnets: intent.SubnetsSpec{
+				PublicList:  []intent.SubnetSpec{{CIDR: "10.0.1.0/24", AZ: "ap-southeast-2a"}},
+				PrivateList: []intent.SubnetSpec{{CIDR: "10.0.2.0/24", AZ: "ap-southeast-2a"}},
+			},
+			DataPath: &intent.DataPathSpec{
+				External: intent.SubnetSpec{CIDR: "10.0.100.0/24", AZ: "ap-southeast-2a"},
+				Internal: intent.SubnetSpec{CIDR: "10.0.101.0/24", AZ: "ap-southeast-2a"},
+			},
+		},
+	}
+
+	wantProfileARN := "arn:aws:iam::123456789012:instance-profile/eks-worker-profile"
+	ec2Fake := &strangerSweepFakeEC2{
+		instances: []ec2types.Instance{
+			{
+				InstanceId: aws.String("i-worker-1"),
+				State:      &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
+				IamInstanceProfile: &ec2types.IamInstanceProfile{
+					Arn: aws.String(wantProfileARN),
+				},
+			},
+		},
+	}
+	clients := &Clients{
+		Region:   "ap-southeast-2",
+		PhaseEC2: ec2Fake,
+		SSM:      &fakePhaseSSM{},
+	}
+
+	if err := Phase17bJumphost(ctx, cl, st, clients, false); err != nil {
+		t.Fatalf("Phase17bJumphost failed: %v", err)
+	}
+	if ec2Fake.lastRunInstancesInput == nil {
+		t.Fatalf("expected RunInstances to be called")
+	}
+	if len(ec2Fake.lastRunInstancesInput.NetworkInterfaces) != 3 {
+		t.Fatalf("expected 3 NICs on jumphost, got %d", len(ec2Fake.lastRunInstancesInput.NetworkInterfaces))
+	}
+	if got := aws.ToString(ec2Fake.lastRunInstancesInput.NetworkInterfaces[0].SubnetId); got != "subnet-priv-0" {
+		t.Errorf("eth0 SubnetId = %q, want subnet-priv-0 (PRIVATE_SUBNET_0)", got)
+	}
+	if got := aws.ToString(ec2Fake.lastRunInstancesInput.NetworkInterfaces[1].SubnetId); got != "subnet-ext-0" {
+		t.Errorf("eth1 SubnetId = %q, want subnet-ext-0", got)
+	}
+	if got := aws.ToString(ec2Fake.lastRunInstancesInput.NetworkInterfaces[2].SubnetId); got != "subnet-int-0" {
+		t.Errorf("eth2 SubnetId = %q, want subnet-int-0", got)
+	}
+	if ec2Fake.lastRunInstancesInput.IamInstanceProfile == nil || aws.ToString(ec2Fake.lastRunInstancesInput.IamInstanceProfile.Arn) != wantProfileARN {
+		t.Errorf("IamInstanceProfile = %+v, want ARN %q", ec2Fake.lastRunInstancesInput.IamInstanceProfile, wantProfileARN)
+	}
+}
+
+type trackingJumphostIAM struct {
+	fakePhaseIAM
+	removedProfileRoles []string
+	deletedProfiles     []string
+	deletedRoles        []string
+}
+
+func (f *trackingJumphostIAM) RemoveRoleFromInstanceProfile(_ context.Context, in *iam.RemoveRoleFromInstanceProfileInput, _ ...func(*iam.Options)) (*iam.RemoveRoleFromInstanceProfileOutput, error) {
+	f.removedProfileRoles = append(f.removedProfileRoles, aws.ToString(in.InstanceProfileName)+":"+aws.ToString(in.RoleName))
+	return &iam.RemoveRoleFromInstanceProfileOutput{}, nil
+}
+
+func (f *trackingJumphostIAM) DeleteInstanceProfile(_ context.Context, in *iam.DeleteInstanceProfileInput, _ ...func(*iam.Options)) (*iam.DeleteInstanceProfileOutput, error) {
+	f.deletedProfiles = append(f.deletedProfiles, aws.ToString(in.InstanceProfileName))
+	return &iam.DeleteInstanceProfileOutput{}, nil
+}
+
+func (f *trackingJumphostIAM) DeleteRole(_ context.Context, in *iam.DeleteRoleInput, _ ...func(*iam.Options)) (*iam.DeleteRoleOutput, error) {
+	f.deletedRoles = append(f.deletedRoles, aws.ToString(in.RoleName))
+	return &iam.DeleteRoleOutput{}, nil
+}
+
+func TestPhase17bJumphostDown_FallbackIAMRoleAndProfileCleanup(t *testing.T) {
+	ctx := context.Background()
+	st, err := state.Load(filepath.Join(t.TempDir(), "state.env"))
+	if err != nil {
+		t.Fatalf("state.Load: %v", err)
+	}
+	// JUMPHOST_ROLE_NAME and JUMPHOST_INSTANCE_PROFILE_NAME are intentionally omitted from state.env.
+	cl := &intent.Cluster{
+		Metadata: intent.Metadata{Name: "bnk-agentcore-demo", Region: "ap-southeast-2"},
+	}
+	iamFake := &trackingJumphostIAM{}
+	clients := &Clients{
+		Region:   "ap-southeast-2",
+		PhaseEC2: &hardeningFakeEC2{},
+		PhaseIAM: iamFake,
+	}
+
+	if err := Phase17bJumphostDown(ctx, cl, st, clients, false); err != nil {
+		t.Fatalf("Phase17bJumphostDown failed: %v", err)
+	}
+	if len(iamFake.removedProfileRoles) != 1 || iamFake.removedProfileRoles[0] != "bnk-agentcore-demo-jumphost-profile:bnk-agentcore-demo-jumphost-role" {
+		t.Errorf("expected RemoveRoleFromInstanceProfile on fallback profile/role, got %v", iamFake.removedProfileRoles)
+	}
+	if len(iamFake.deletedProfiles) != 1 || iamFake.deletedProfiles[0] != "bnk-agentcore-demo-jumphost-profile" {
+		t.Errorf("expected fallback instance profile deleted, got %v", iamFake.deletedProfiles)
+	}
+	if len(iamFake.deletedRoles) != 1 || iamFake.deletedRoles[0] != "bnk-agentcore-demo-jumphost-role" {
+		t.Errorf("expected fallback IAM role deleted, got %v", iamFake.deletedRoles)
 	}
 }

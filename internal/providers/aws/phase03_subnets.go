@@ -213,6 +213,9 @@ func Phase03SubnetsDown(ctx context.Context, cl *intent.Cluster, st *state.State
 			SubnetId: aws.String(id),
 		})
 		if err != nil && awsmw.IsDependencyViolation(err) {
+			if vpcID := st.Get("VPC_ID"); vpcID != "" {
+				sweepVPCInstancesAndENIs(ctx, c, vpcID)
+			}
 			sweepAvailableSubnetENIs(ctx, c.PhaseEC2, id)
 			_, err = c.PhaseEC2.DeleteSubnet(ctx, &ec2.DeleteSubnetInput{
 				SubnetId: aws.String(id),

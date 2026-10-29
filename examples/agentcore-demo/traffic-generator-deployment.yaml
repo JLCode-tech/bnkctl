@@ -274,7 +274,7 @@ data:
         b_res = post_json(
             MCP_URL,
             bal_body,
-            {"Authorization": "Bearer " + EXTERNAL_TOKEN, "Host": INGRESS_HOST},
+            {"Authorization": "Bearer " + EXTERNAL_TOKEN, "Host": INGRESS_HOST, "Mcp-Session-Id": f"sess-{prof['principal_id']}"},
             timeout=5
         )
 

@@ -179,7 +179,66 @@ func Phase02VPC(ctx context.Context, cl *intent.Cluster, st *state.State, c *Cli
 	return st.Save()
 }
 
-// sweepVPCBlockers removes residual EICEs, available ENIs, non-default security groups,
+// sweepVPCInstancesAndENIs terminates any non-terminated EC2 instances in vpcID,
+// force-detaches non-primary attached ENIs, and deletes all available ENIs in vpcID.
+func sweepVPCInstancesAndENIs(ctx context.Context, c *Clients, vpcID string) {
+	if c == nil || c.PhaseEC2 == nil || vpcID == "" {
+		return
+	}
+	vpcFilter := []ec2types.Filter{
+		{Name: aws.String("vpc-id"), Values: []string{vpcID}},
+	}
+
+	// Terminate any lingering EC2 instances in the VPC (e.g., demo stranger instance).
+	if instOut, err := c.PhaseEC2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		Filters: vpcFilter,
+	}); err == nil && instOut != nil {
+		var toTerminate []string
+		for _, r := range instOut.Reservations {
+			for _, inst := range r.Instances {
+				if inst.InstanceId == nil || inst.State == nil {
+					continue
+				}
+				if inst.State.Name != ec2types.InstanceStateNameTerminated && inst.State.Name != ec2types.InstanceStateNameShuttingDown {
+					toTerminate = append(toTerminate, *inst.InstanceId)
+				}
+			}
+		}
+		if len(toTerminate) > 0 {
+			_, _ = c.PhaseEC2.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
+				InstanceIds: toTerminate,
+			})
+			for _, id := range toTerminate {
+				_ = waitForInstanceState(ctx, c, id, ec2types.InstanceStateNameTerminated)
+			}
+		}
+	}
+
+	// Detach any non-primary attached ENIs and delete all available ENIs in the VPC.
+	if eniOut, err := c.PhaseEC2.DescribeNetworkInterfaces(ctx, &ec2.DescribeNetworkInterfacesInput{
+		Filters: vpcFilter,
+	}); err == nil && eniOut != nil {
+		for _, eni := range eniOut.NetworkInterfaces {
+			if eni.NetworkInterfaceId == nil {
+				continue
+			}
+			if eni.Status != ec2types.NetworkInterfaceStatusAvailable && eni.Attachment != nil && eni.Attachment.AttachmentId != nil {
+				if eni.Attachment.DeviceIndex == nil || *eni.Attachment.DeviceIndex != 0 {
+					_, _ = c.PhaseEC2.DetachNetworkInterface(ctx, &ec2.DetachNetworkInterfaceInput{
+						AttachmentId: eni.Attachment.AttachmentId,
+						Force:        aws.Bool(true),
+					})
+					_ = waitForENIAvailable(ctx, c, *eni.NetworkInterfaceId)
+				}
+			}
+			_, _ = c.PhaseEC2.DeleteNetworkInterface(ctx, &ec2.DeleteNetworkInterfaceInput{
+				NetworkInterfaceId: eni.NetworkInterfaceId,
+			})
+		}
+	}
+}
+
+// sweepVPCBlockers removes residual EICEs, instances, ENIs, non-default security groups,
 // subnets, non-main route tables, and attached internet gateways inside vpcID so DeleteVpc can succeed.
 func sweepVPCBlockers(ctx context.Context, c *Clients, vpcID string) {
 	if c == nil || c.PhaseEC2 == nil || vpcID == "" {
@@ -207,53 +266,8 @@ func sweepVPCBlockers(ctx context.Context, c *Clients, vpcID string) {
 		}
 	}
 
-	// 1b. Terminate any lingering EC2 instances in the VPC (e.g., demo stranger instance).
-	if instOut, err := c.PhaseEC2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-		Filters: vpcFilter,
-	}); err == nil && instOut != nil {
-		var toTerminate []string
-		for _, r := range instOut.Reservations {
-			for _, inst := range r.Instances {
-				if inst.InstanceId == nil || inst.State == nil {
-					continue
-				}
-				if inst.State.Name != ec2types.InstanceStateNameTerminated && inst.State.Name != ec2types.InstanceStateNameShuttingDown {
-					toTerminate = append(toTerminate, *inst.InstanceId)
-				}
-			}
-		}
-		if len(toTerminate) > 0 {
-			_, _ = c.PhaseEC2.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
-				InstanceIds: toTerminate,
-			})
-			for _, id := range toTerminate {
-				_ = waitForInstanceState(ctx, c, id, ec2types.InstanceStateNameTerminated)
-			}
-		}
-	}
-
-	// 2. Detach any non-primary attached ENIs and delete all available ENIs in the VPC.
-	if eniOut, err := c.PhaseEC2.DescribeNetworkInterfaces(ctx, &ec2.DescribeNetworkInterfacesInput{
-		Filters: vpcFilter,
-	}); err == nil && eniOut != nil {
-		for _, eni := range eniOut.NetworkInterfaces {
-			if eni.NetworkInterfaceId == nil {
-				continue
-			}
-			if eni.Status != ec2types.NetworkInterfaceStatusAvailable && eni.Attachment != nil && eni.Attachment.AttachmentId != nil {
-				if eni.Attachment.DeviceIndex == nil || *eni.Attachment.DeviceIndex != 0 {
-					_, _ = c.PhaseEC2.DetachNetworkInterface(ctx, &ec2.DetachNetworkInterfaceInput{
-						AttachmentId: eni.Attachment.AttachmentId,
-						Force:        aws.Bool(true),
-					})
-					_ = waitForENIAvailable(ctx, c, *eni.NetworkInterfaceId)
-				}
-			}
-			_, _ = c.PhaseEC2.DeleteNetworkInterface(ctx, &ec2.DeleteNetworkInterfaceInput{
-				NetworkInterfaceId: eni.NetworkInterfaceId,
-			})
-		}
-	}
+	// 2. Terminate any lingering EC2 instances and detach/delete residual ENIs in the VPC.
+	sweepVPCInstancesAndENIs(ctx, c, vpcID)
 
 	// 3. Revoke all rules on non-default security groups first (breaking circular/cross-SG refs), then delete them.
 	if sgOut, err := c.PhaseEC2.DescribeSecurityGroups(ctx, &ec2.DescribeSecurityGroupsInput{

@@ -180,12 +180,13 @@ ssm_run() {
 }
 
 # ── helper: POST to the MCP route on the jumphost, echo "<status>\n<body>" ────
+DEMO_SESSION="demo-run-$$"
 ssm_curl() {
   local body="$1"; shift
   local hdrs=""
   for h in "$@"; do hdrs="$hdrs -H '$h'"; done
   ssm_run "curl -s -o /tmp/dbody -w '%{http_code}' --max-time 15 -X POST http://$VIP/v1/mcp/forecast \
--H 'Host: $INGRESS_HOST' -H 'Content-Type: application/json' -H 'Accept: application/json' $hdrs \
+-H 'Host: $INGRESS_HOST' -H 'Content-Type: application/json' -H 'Accept: application/json' -H 'Mcp-Session-Id: $DEMO_SESSION' $hdrs \
 -d '$body'; echo; head -c 220 /tmp/dbody"
 }
 
@@ -240,7 +241,7 @@ note "Acts 2-3 already spent part of this caller's budget — the bucket is shar
 note "across everything that identity does, which is the point of keying on it."
 LOOP_CMD="for i in \$(seq 1 13); do printf '%s ' \"\$(curl -s -o /dev/null -w '%{http_code}' --max-time 12 \
 -X POST http://$VIP/v1/mcp/forecast -H 'Host: $INGRESS_HOST' -H 'Content-Type: application/json' \
--H 'Accept: application/json' -H 'Authorization: Bearer $EXTERNAL_TOKEN' -d '$FORECAST_BODY')\"; done; echo"
+-H 'Accept: application/json' -H 'Mcp-Session-Id: $DEMO_SESSION' -H 'Authorization: Bearer $EXTERNAL_TOKEN' -d '$FORECAST_BODY')\"; done; echo"
 LOOP_ID=$(aws ssm send-command --region "$REGION" --instance-ids "$JUMPHOST" \
   --document-name AWS-RunShellScript \
   --parameters "commands=[$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$LOOP_CMD")]" \
@@ -275,7 +276,7 @@ else
 TLS_CMD="umask 077; echo '$CA_B64' | base64 -d > /tmp/bnkca.crt; \
 curl -s -o /tmp/tbody -w '%{http_code}' --max-time 15 --cacert /tmp/bnkca.crt \
 --resolve $INGRESS_HOST:443:$VIP -X POST https://$INGRESS_HOST/v1/mcp/forecast \
--H 'Content-Type: application/json' -H 'Accept: application/json' \
+-H 'Content-Type: application/json' -H 'Accept: application/json' -H 'Mcp-Session-Id: $DEMO_SESSION' \
 -H 'Authorization: Bearer $AGENT_TOKEN' -d '$FORECAST_BODY'; echo; \
 echo | openssl s_client -connect $VIP:443 -servername $INGRESS_HOST 2>/dev/null \
 | openssl x509 -noout -subject -issuer 2>/dev/null; rm -f /tmp/bnkca.crt"
