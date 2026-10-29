@@ -127,7 +127,7 @@ spec:
     - name: primary
       providerRef:
         name: bedrock-ap-southeast-2
-      upstream: anthropic.claude-sonnet-4-5-20250929-v1:0
+      upstream: openai.gpt-oss-120b-1:0
       dialects: ["bedrock"]
       weight: 80
       state: Active
@@ -137,7 +137,7 @@ spec:
     - name: fallback
       providerRef:
         name: bedrock-us-east-1-fallback
-      upstream: anthropic.claude-3-5-haiku-20241022-v1:0
+      upstream: openai.gpt-oss-20b-1:0
       dialects: ["bedrock"]
       weight: 20
       state: Active
@@ -160,7 +160,7 @@ spec:
     - name: primary
       providerRef:
         name: bedrock-ap-southeast-2
-      upstream: anthropic.claude-sonnet-4-5-20250929-v1:0
+      upstream: openai.gpt-oss-120b-1:0
       dialects: ["bedrock"]
       weight: 80
       state: Active
@@ -170,7 +170,7 @@ spec:
     - name: fallback
       providerRef:
         name: bedrock-us-east-1-fallback
-      upstream: anthropic.claude-3-5-haiku-20241022-v1:0
+      upstream: openai.gpt-oss-20b-1:0
       dialects: ["bedrock"]
       weight: 20
       state: Active

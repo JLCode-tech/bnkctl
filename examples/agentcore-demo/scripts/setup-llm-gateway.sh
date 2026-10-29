@@ -24,6 +24,17 @@ TMM_EGRESS_GATEWAY="${TMM_EGRESS_GATEWAY:-${EXT_OCTETS}.1}"
 FORGE_URL="${FORGE_URL:-http://localhost:8000}"
 
 if [ -z "${BEDROCK_PRIMARY_API_KEY:-}" ] || [ "${BEDROCK_PRIMARY_API_KEY}" = "replace-with-bedrock-primary-api-key" ]; then
+  for envfile in /tmp/bedrock_keys.env /tmp/.bedrock-keys.env; do
+    if [ -f "${envfile}" ]; then
+      # shellcheck disable=SC1090
+      source "${envfile}"
+      if [ -n "${BEDROCK_PRIMARY_API_KEY:-}" ] && [ "${BEDROCK_PRIMARY_API_KEY}" != "replace-with-bedrock-primary-api-key" ]; then
+        break
+      fi
+    fi
+  done
+fi
+if [ -z "${BEDROCK_PRIMARY_API_KEY:-}" ] || [ "${BEDROCK_PRIMARY_API_KEY}" = "replace-with-bedrock-primary-api-key" ]; then
   for sname in bedrock-primary-api-key bedrock-primary-key; do
     EXISTING_PRIMARY="$(kubectl get secret "${sname}" -n "${BNK_NS}" -o jsonpath='{.data.api-key}' 2>/dev/null | base64 -d 2>/dev/null || true)"
     if [ -n "${EXISTING_PRIMARY}" ] && [ "${EXISTING_PRIMARY}" != "replace-with-bedrock-primary-api-key" ]; then
