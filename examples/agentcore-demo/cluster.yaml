@@ -75,7 +75,7 @@ forge:
   mcpUrl: http://localhost:8081/mcp/
   credentialTemplateId: 1
   username: admin
-  password: admin123
+  # password: set AWSBNKCTL_FORGE_PASSWORD instead of writing it here
 
 tags:
   cost-center: RnD-AI

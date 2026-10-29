@@ -64,8 +64,16 @@ spec:
             for f in /proc/sys/net/ipv4/conf/eni*/proxy_arp; do [ -e "$f" ] && echo 1 > "$f" 2>/dev/null || true; done
             nsenter -t 1 -m -u -i -n -p -- sh -c '
               primary_dev=$(ip -4 route show default 2>/dev/null | awk "{for(i=1;i<=NF;i++) if(\$i==\"dev\"){print \$(i+1); exit}}")
-              svc_cidr=$(iptables-save -t nat 2>/dev/null | awk "/-j KUBE-SERVICES/ && /-d / {for(i=1;i<=NF;i++) if(\$i==\"-d\"){print \$(i+1); exit}}")
-              [ -n "$svc_cidr" ] || svc_cidr="172.20.0.0/16"
+              svc_cidr=""
+              if [ -n "$KUBERNETES_SERVICE_HOST" ]; then
+                svc_cidr="${KUBERNETES_SERVICE_HOST%.*.*}.0.0/16"
+              fi
+              if [ -z "$svc_cidr" ]; then
+                svc_cidr=$(iptables-save -t nat 2>/dev/null | awk "/^-A KUBE-SERVICES / && /-d / {for(i=1;i<=NF;i++) if(\$i==\"-d\"){split(\$(i+1),a,\".\"); if(length(a)>=2){print a[1]\".\"a[2]\".0.0/16\"; exit}}}")
+              fi
+              if [ -z "$svc_cidr" ]; then
+                svc_cidr=$(iptables-save -t nat 2>/dev/null | awk "/-j KUBE-SERVICES/ && /-d / {for(i=1;i<=NF;i++) if(\$i==\"-d\"){print \$(i+1); exit}}")
+              fi
               for d in /sys/class/net/*; do
                 [ -e "$d/device" ] || continue
                 dev=$(basename "$d")
@@ -73,7 +81,9 @@ spec:
                 ethtool -K "$dev" tso off gso off gro off tx-nocache-copy off 2>/dev/null || true
                 if [ -n "$primary_dev" ] && [ "$dev" != "$primary_dev" ]; then
                   for cidr in $(ip -4 route show dev "$dev" proto kernel scope link 2>/dev/null | awk "{print \$1}"); do
-                    iptables -t nat -C PREROUTING -s "$cidr" -d "$svc_cidr" -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s "$cidr" -d "$svc_cidr" -j KUBE-SERVICES 2>/dev/null || true
+                    if [ -n "$svc_cidr" ]; then
+                      iptables -t nat -C PREROUTING -s "$cidr" -d "$svc_cidr" -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s "$cidr" -d "$svc_cidr" -j KUBE-SERVICES 2>/dev/null || true
+                    fi
                     iptables -t nat -C POSTROUTING -s "$cidr" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s "$cidr" -j MASQUERADE 2>/dev/null || true
                   done
                 fi
@@ -88,7 +98,9 @@ spec:
                   [ -n "$mac" ] && [ "$mac" != "$primary_mac" ] || continue
                   sub_cidr=$(curl -sS -m 2 -H "X-aws-ec2-metadata-token: $imds_token" "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${mac}/subnet-ipv4-cidr-block" 2>/dev/null || true)
                   [ -n "$sub_cidr" ] || continue
-                  iptables -t nat -C PREROUTING -s "$sub_cidr" -d "$svc_cidr" -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s "$sub_cidr" -d "$svc_cidr" -j KUBE-SERVICES || true
+                  if [ -n "$svc_cidr" ]; then
+                    iptables -t nat -C PREROUTING -s "$sub_cidr" -d "$svc_cidr" -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s "$sub_cidr" -d "$svc_cidr" -j KUBE-SERVICES || true
+                  fi
                   if [ -n "$vpc_cidr" ]; then
                     iptables -t nat -C POSTROUTING -s "$sub_cidr" -d "$vpc_cidr" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s "$sub_cidr" -d "$vpc_cidr" -j MASQUERADE || true
                   else

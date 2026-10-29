@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
 )
 
 const hostDeviceTagKey = "f5-cne-device"
@@ -401,13 +402,7 @@ func Phase17SecondaryENIs(ctx context.Context, cl *intent.Cluster, st *state.Sta
 	}
 
 	if primaryENIID := st.Get("PRIMARY_ENI_ID"); primaryENIID != "" {
-		svcCIDR := st.Get("SERVICE_CIDR")
-		if svcCIDR == "" {
-			svcCIDR = st.Get("EKS_SERVICE_CIDR")
-		}
-		if svcCIDR == "" {
-			svcCIDR = "172.20.0.0/16"
-		}
+		svcCIDR := discoverClusterServiceCIDR(ctx, c, cl, st)
 		for _, rtKey := range []string{"BNK_EXT_RT_ID", "BNK_INT_RT_ID"} {
 			if rtID := st.Get(rtKey); rtID != "" {
 				if err := replaceOrCreateENIRoute(ctx, c, rtID, svcCIDR, primaryENIID); err != nil {
@@ -418,6 +413,36 @@ func Phase17SecondaryENIs(ctx context.Context, cl *intent.Cluster, st *state.Sta
 	}
 
 	return nil
+}
+
+func discoverClusterServiceCIDR(ctx context.Context, c *Clients, cl *intent.Cluster, st *state.State) string {
+	if svcCIDR := st.Get("SERVICE_CIDR"); svcCIDR != "" {
+		return svcCIDR
+	}
+	if svcCIDR := st.Get("EKS_SERVICE_CIDR"); svcCIDR != "" {
+		return svcCIDR
+	}
+	if c != nil && c.PhaseEKS != nil {
+		clusterName := st.Get("EKS_CLUSTER_NAME")
+		if clusterName == "" && cl != nil {
+			clusterName = cl.Metadata.Name
+		}
+		if clusterName != "" {
+			if out, err := c.PhaseEKS.DescribeCluster(ctx, &eks.DescribeClusterInput{
+				Name: aws.String(clusterName),
+			}); err == nil && out != nil && out.Cluster != nil &&
+				out.Cluster.KubernetesNetworkConfig != nil &&
+				out.Cluster.KubernetesNetworkConfig.ServiceIpv4Cidr != nil &&
+				*out.Cluster.KubernetesNetworkConfig.ServiceIpv4Cidr != "" {
+				cidr := *out.Cluster.KubernetesNetworkConfig.ServiceIpv4Cidr
+				st.Set("EKS_SERVICE_CIDR", cidr)
+				st.Set("SERVICE_CIDR", cidr)
+				_ = st.Save()
+				return cidr
+			}
+		}
+	}
+	return "172.20.0.0/16"
 }
 
 func replaceOrCreateENIRoute(ctx context.Context, c *Clients, rtID, destCIDR, eniID string) error {

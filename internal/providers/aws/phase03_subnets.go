@@ -23,6 +23,7 @@ func resolveClusterAZs(ctx context.Context, cl *intent.Cluster, ec2c PhaseEC2API
 	out, err := ec2c.DescribeAvailabilityZones(ctx, &ec2.DescribeAvailabilityZonesInput{
 		Filters: []ec2types.Filter{
 			{Name: aws.String("state"), Values: []string{"available"}},
+			{Name: aws.String("opt-in-status"), Values: []string{"opt-in-not-required", "opted-in"}},
 		},
 	})
 	if err != nil || out == nil || len(out.AvailabilityZones) == 0 {
@@ -180,6 +181,9 @@ func Phase03Subnets(ctx context.Context, cl *intent.Cluster, st *state.State, c 
 	}
 
 	resolveClusterAZs(ctx, cl, c.PhaseEC2)
+	if len(cl.Network.AZs) > 0 {
+		st.Set("ACTIVE_AZS", strings.Join(cl.Network.AZs, ","))
+	}
 
 	clusterTag := "kubernetes.io/cluster/" + cl.Metadata.Name
 
@@ -372,5 +376,6 @@ func Phase03SubnetsDown(ctx context.Context, cl *intent.Cluster, st *state.State
 	}
 
 	st.Delete("MGMT_SUBNET")
+	st.Delete("ACTIVE_AZS")
 	return st.Save()
 }

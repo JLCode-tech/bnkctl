@@ -205,8 +205,23 @@ func RenderUnifiedCNEInstance(cl *intent.Cluster, underlay *provider.UnderlayCon
 				pci = "0000:00:07.0"
 			}
 			for _, v := range n.NodeNICMap {
-				pci = v
-				break
+				if v != "" {
+					pci = v
+					break
+				}
+			}
+			for _, dn := range underlay.DataplaneNodes {
+				for j, nic := range dn.NICs {
+					if nic.NetworkName == n.Name || j == i {
+						if nic.LinuxIfName != "" {
+							ifName = strings.ToUpper(nic.LinuxIfName)
+						}
+						if nic.PCIAddress != "" {
+							pci = nic.PCIAddress
+						}
+						break
+					}
+				}
 			}
 			resEnv := fmt.Sprintf("ROBIN_VFIO_RESOURCE_%d", i+1)
 			pciEnv := "PCIDEVICE_INTEL_COM_" + ifName

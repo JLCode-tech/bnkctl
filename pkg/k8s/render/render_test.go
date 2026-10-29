@@ -7,6 +7,8 @@ import (
 
 	"github.com/JLCode-tech/bnkctl/pkg/intent"
 	"github.com/JLCode-tech/bnkctl/pkg/k8s/manifests"
+	"github.com/JLCode-tech/bnkctl/pkg/provider"
+	"github.com/JLCode-tech/bnkctl/pkg/release"
 )
 
 func clusterFixture(name string) *intent.Cluster {
@@ -940,5 +942,50 @@ func TestRenderCNEInstance_AIGateway241(t *testing.T) {
 		if isAIGatewayManifestVersion(v) {
 			t.Errorf("expected isAIGatewayManifestVersion(%q) = false", v)
 		}
+	}
+}
+
+func TestRenderUnifiedCNEInstance_DynamicNICNamesAndPCIs(t *testing.T) {
+	cl := cneInstanceCluster()
+	cl.Bnk.ManifestVersion = "2.4.1-3.2850.1-0.0.9"
+	profile := &release.ReleaseProfile{
+		Version: "2.4.1-3.2850.1-0.0.9",
+		Train:   release.Train{Major: 2, Minor: 4},
+	}
+	underlay := &provider.UnderlayContext{
+		CloudName:       intent.ProviderAWS,
+		DataplaneDriver: provider.DriverDPDKPCI,
+		ServiceCIDR:     "10.100.0.0/16",
+		Networks: []provider.NetworkAttachmentSpec{
+			{Name: "external-net", Role: "external", NodeNICMap: map[string]string{"node-1": "0000:28:00.0"}},
+			{Name: "internal-net", Role: "internal", NodeNICMap: map[string]string{"node-1": "0000:27:00.0"}},
+		},
+		DataplaneNodes: []provider.NodeAttachment{
+			{
+				NodeName: "node-1",
+				NICs: []provider.NICAttachment{
+					{NetworkName: "external-net", LinuxIfName: "ens6", PCIAddress: "0000:28:00.0"},
+					{NetworkName: "internal-net", LinuxIfName: "ens5", PCIAddress: "0000:27:00.0"},
+				},
+			},
+		},
+	}
+	out, err := RenderUnifiedCNEInstance(cl, underlay, profile)
+	if err != nil {
+		t.Fatalf("RenderUnifiedCNEInstance: %v", err)
+	}
+	rendered := string(out)
+	for _, want := range []string{
+		"name: ROBIN_VFIO_RESOURCE_1\n        value: ENS6",
+		"name: PCIDEVICE_INTEL_COM_ENS6\n        value: \"0000:28:00.0\"",
+		"name: ROBIN_VFIO_RESOURCE_2\n        value: ENS5",
+		"name: PCIDEVICE_INTEL_COM_ENS5\n        value: \"0000:27:00.0\"",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("RenderUnifiedCNEInstance missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "ENS8") || strings.Contains(rendered, "ENS7") {
+		t.Errorf("RenderUnifiedCNEInstance still contains hardcoded ENS8/ENS7 when dynamic NICs provided:\n%s", rendered)
 	}
 }

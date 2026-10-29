@@ -41,6 +41,16 @@ spec:
             sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
             sysctl -w net.netfilter.nf_conntrack_tcp_be_liberal=1 >/dev/null 2>&1 || true
             primary_dev=$(ip -4 route show default 2>/dev/null | awk "{for(i=1;i<=NF;i++) if(\$i==\"dev\"){print \$(i+1); exit}}")
+            svc_cidr=""
+            if [ -n "$KUBERNETES_SERVICE_HOST" ]; then
+              svc_cidr="${KUBERNETES_SERVICE_HOST%.*.*}.0.0/16"
+            fi
+            if [ -z "$svc_cidr" ]; then
+              svc_cidr=$(iptables-save -t nat 2>/dev/null | awk "/^-A KUBE-SERVICES / && /-d / {for(i=1;i<=NF;i++) if(\$i==\"-d\"){split(\$(i+1),a,\".\"); if(length(a)>=2){print a[1]\".\"a[2]\".0.0/16\"; exit}}}")
+            fi
+            if [ -z "$svc_cidr" ]; then
+              svc_cidr=$(iptables-save -t nat 2>/dev/null | awk "/-j KUBE-SERVICES/ && /-d / {for(i=1;i<=NF;i++) if(\$i==\"-d\"){print \$(i+1); exit}}")
+            fi
             for d in /sys/class/net/*; do
               [ -e "$d/device" ] || continue
               ifname=$(basename "$d")
@@ -48,16 +58,33 @@ spec:
               ethtool -K "$ifname" tso off gso off gro off tx-nocache-copy off 2>/dev/null || true
               if [ -n "$primary_dev" ] && [ "$ifname" != "$primary_dev" ]; then
                 for cidr in $(ip -4 route show dev "$ifname" proto kernel scope link 2>/dev/null | awk "{print \$1}"); do
-                  iptables -t nat -C PREROUTING -s "$cidr" -d 172.20.0.0/16 -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s "$cidr" -d 172.20.0.0/16 -j KUBE-SERVICES 2>/dev/null || true
+                  if [ -n "$svc_cidr" ]; then
+                    iptables -t nat -C PREROUTING -s "$cidr" -d "$svc_cidr" -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s "$cidr" -d "$svc_cidr" -j KUBE-SERVICES 2>/dev/null || true
+                  fi
                   iptables -t nat -C POSTROUTING -s "$cidr" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s "$cidr" -j MASQUERADE 2>/dev/null || true
                 done
               fi
             done
             iptables -C FORWARD -m conntrack --ctstate INVALID -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -m conntrack --ctstate INVALID -j ACCEPT 2>/dev/null || true
-            iptables -t nat -C PREROUTING -s 10.0.10.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s 10.0.10.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES 2>/dev/null || true
-            iptables -t nat -C PREROUTING -s 10.0.20.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s 10.0.20.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES 2>/dev/null || true
-            iptables -t nat -C POSTROUTING -s 10.0.10.0/24 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.0.10.0/24 -j MASQUERADE 2>/dev/null || true
-            iptables -t nat -C POSTROUTING -s 10.0.20.0/24 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.0.20.0/24 -j MASQUERADE 2>/dev/null || true
+            imds_token=$(curl -sS -m 2 -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null || true)
+            if [ -n "$imds_token" ]; then
+              primary_mac=$(cat "/sys/class/net/$primary_dev/address" 2>/dev/null | tr "A-F" "a-f")
+              vpc_cidr=$(curl -sS -m 2 -H "X-aws-ec2-metadata-token: $imds_token" "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${primary_mac}/vpc-ipv4-cidr-block" 2>/dev/null || true)
+              for mac_dir in $(curl -sS -m 2 -H "X-aws-ec2-metadata-token: $imds_token" "http://169.254.169.254/latest/meta-data/network/interfaces/macs/" 2>/dev/null || true); do
+                mac=$(echo "$mac_dir" | tr -d "/" | tr "A-F" "a-f")
+                [ -n "$mac" ] && [ "$mac" != "$primary_mac" ] || continue
+                sub_cidr=$(curl -sS -m 2 -H "X-aws-ec2-metadata-token: $imds_token" "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${mac}/subnet-ipv4-cidr-block" 2>/dev/null || true)
+                [ -n "$sub_cidr" ] || continue
+                if [ -n "$svc_cidr" ]; then
+                  iptables -t nat -C PREROUTING -s "$sub_cidr" -d "$svc_cidr" -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s "$sub_cidr" -d "$svc_cidr" -j KUBE-SERVICES 2>/dev/null || true
+                fi
+                if [ -n "$vpc_cidr" ]; then
+                  iptables -t nat -C POSTROUTING -s "$sub_cidr" -d "$vpc_cidr" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s "$sub_cidr" -d "$vpc_cidr" -j MASQUERADE 2>/dev/null || true
+                else
+                  iptables -t nat -C POSTROUTING -s "$sub_cidr" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s "$sub_cidr" -j MASQUERADE 2>/dev/null || true
+                fi
+              done
+            fi
           ' >/dev/null 2>&1 || true
 
           out='{'

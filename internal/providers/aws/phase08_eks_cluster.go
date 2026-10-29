@@ -245,6 +245,7 @@ func Phase08EKSClusterDown(ctx context.Context, cl *intent.Cluster, st *state.St
 		"EKS_VERSION",
 		"EKS_CLUSTER_SG_ID",
 		"EKS_SERVICE_CIDR",
+		"SERVICE_CIDR",
 	} {
 		st.Delete(k)
 	}

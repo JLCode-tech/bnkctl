@@ -606,6 +606,10 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 	if intIf == "" {
 		intIf = "ens7"
 	}
+	nodeName := st.Get("TMM_NODE_NAME")
+	if nodeName == "" {
+		nodeName = "tmm-node-0"
+	}
 	if extPCI != "" && len(u.Networks) > 0 {
 		extCNI, _ := json.Marshal(map[string]any{
 			"cniVersion": "0.3.1",
@@ -614,6 +618,7 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 			"pciBusID":   extPCI,
 		})
 		u.Networks[0].CNIConfigJSON = string(extCNI)
+		u.Networks[0].NodeNICMap = map[string]string{nodeName: extPCI}
 	}
 	if intPCI != "" && len(u.Networks) > 1 {
 		intCNI, _ := json.Marshal(map[string]any{
@@ -623,6 +628,7 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 			"pciBusID":   intPCI,
 		})
 		u.Networks[1].CNIConfigJSON = string(intCNI)
+		u.Networks[1].NodeNICMap = map[string]string{nodeName: intPCI}
 	}
 	if extPCI != "" || intPCI != "" {
 		nics := []provider.NICAttachment{
@@ -644,10 +650,6 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 				TMMInterface: "1.2",
 				Driver:       provider.DriverDPDKPCI,
 			})
-		}
-		nodeName := st.Get("TMM_NODE_NAME")
-		if nodeName == "" {
-			nodeName = "tmm-node-0"
 		}
 		u.DataplaneNodes = []provider.NodeAttachment{
 			{
