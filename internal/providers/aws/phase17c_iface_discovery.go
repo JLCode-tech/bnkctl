@@ -159,17 +159,50 @@ func Phase17cIfaceDiscovery(ctx context.Context, cl *intent.Cluster, st *state.S
 	}
 
 	if extENIID := st.Get("EXT_ENI_ID"); extENIID != "" && c.PhaseEC2 != nil && disc.ExtIfName != "" {
+		extTags := []ec2types.Tag{
+			{
+				Key:   aws.String(hostDeviceTagKey),
+				Value: aws.String(disc.ExtIfName),
+			},
+			{
+				Key:   aws.String("bnk.f5.com/ifname"),
+				Value: aws.String(disc.ExtIfName),
+			},
+		}
+		if disc.ExtPCIBDF != "" {
+			extTags = append(extTags, ec2types.Tag{
+				Key:   aws.String("bnk.f5.com/pci"),
+				Value: aws.String(disc.ExtPCIBDF),
+			})
+		}
 		if _, err := c.PhaseEC2.CreateTags(ctx, &ec2.CreateTagsInput{
 			Resources: []string{extENIID},
-			Tags: []ec2types.Tag{
-				{
-					Key:   aws.String(hostDeviceTagKey),
-					Value: aws.String(disc.ExtIfName),
-				},
-			},
+			Tags:      extTags,
 		}); err != nil {
 			return fmt.Errorf("phase 17c iface discovery: CreateTags %s=%s on %s: %w", hostDeviceTagKey, disc.ExtIfName, extENIID, err)
 		}
+	}
+	if intENIID := st.Get("INT_ENI_ID"); intENIID != "" && c.PhaseEC2 != nil && disc.IntIfName != "" {
+		intTags := []ec2types.Tag{
+			{
+				Key:   aws.String(hostDeviceTagKey),
+				Value: aws.String(disc.IntIfName),
+			},
+			{
+				Key:   aws.String("bnk.f5.com/ifname"),
+				Value: aws.String(disc.IntIfName),
+			},
+		}
+		if disc.IntPCIBDF != "" {
+			intTags = append(intTags, ec2types.Tag{
+				Key:   aws.String("bnk.f5.com/pci"),
+				Value: aws.String(disc.IntPCIBDF),
+			})
+		}
+		_, _ = c.PhaseEC2.CreateTags(ctx, &ec2.CreateTagsInput{
+			Resources: []string{intENIID},
+			Tags:      intTags,
+		})
 	}
 
 	return st.Save()

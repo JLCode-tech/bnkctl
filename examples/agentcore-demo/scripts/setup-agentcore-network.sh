@@ -13,12 +13,17 @@ set -euo pipefail
 
 DEMO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLUSTER_NAME="${1:-bnk-agentcore-demo}"
+CFG="${CFG:-$DEMO_DIR/cluster.yaml}"
 # The demo Gateway in gateway-deployment.yaml is named <cluster>-gateway in the
 # default namespace; override both if you renamed it.
 # The Gateway name is fixed in gateway-deployment.yaml, whatever the cluster is called.
 GATEWAY_NAME="${GATEWAY_NAME:-bnk-agentcore-demo-gateway}"
 GATEWAY_NS="${GATEWAY_NS:-default}"
-REGION="${AWS_REGION:-$(aws configure get region 2>/dev/null || echo "ap-southeast-2")}"
+CFG_REGION=""
+if [ -f "$CFG" ]; then
+    CFG_REGION=$(awk '/^  region:/{print $2; exit}' "$CFG" 2>/dev/null || true)
+fi
+REGION="${AWS_REGION:-${CFG_REGION:-$(aws configure get region 2>/dev/null || echo "ap-southeast-2")}}"
 export AWS_DEFAULT_REGION="$REGION"
 
 BNK_DNS_ZONE="${BNK_DNS_ZONE:-bnk-demo.internal}"
@@ -136,33 +141,90 @@ aws ec2 authorize-security-group-ingress \
     "IpProtocol=tcp,FromPort=443,ToPort=443,UserIdGroupPairs=[{GroupId=$AGENT_SG_ID,Description=agentcore-to-bnk-vip-https}]" \
     "IpProtocol=-1,IpRanges=[{CidrIp=$VPC_CIDR,Description=vpc-internal-to-bnk-tmm}]" 2>/dev/null || echo "Ingress rules already exist."
 
-AIGW_VIP="${AIGW_VIP:-10.0.10.151}"
-SERVICE_CIDR="${SERVICE_CIDR:-172.20.0.0/16}"
 BNK_NS="${BNK_NS:-f5-cne-system}"
+DISC_SVC_CIDR=$(aws eks describe-cluster --name "$CLUSTER_NAME" --query 'cluster.kubernetesNetworkConfig.serviceIpv4Cidr' --output text 2>/dev/null || true)
+if [ -z "$DISC_SVC_CIDR" ] || [ "$DISC_SVC_CIDR" == "None" ]; then
+    DISC_SVC_CIDR="172.20.0.0/16"
+fi
+SERVICE_CIDR="${SERVICE_CIDR:-$DISC_SVC_CIDR}"
 
-echo "Discovering BNK worker node and ENIs in VPC $VPC_ID..."
-BNK_INSTANCE_ID=$(aws ec2 describe-network-interfaces \
+echo "Discovering BNK worker node and data-path ENIs in VPC $VPC_ID..."
+EXT_ENI_ID=$(aws ec2 describe-network-interfaces \
     --filters \
         "Name=vpc-id,Values=$VPC_ID" \
         "Name=tag:awsbnkctl:cluster,Values=$CLUSTER_NAME" \
-        "Name=tag:f5-cne-device,Values=external" \
-    --query "NetworkInterfaces[0].Attachment.InstanceId" --output text 2>/dev/null || echo "None")
+        "Name=tag:bnk.f5.com/datapath,Values=external" \
+    --query "NetworkInterfaces[0].NetworkInterfaceId" --output text 2>/dev/null || echo "None")
+INT_ENI_ID=$(aws ec2 describe-network-interfaces \
+    --filters \
+        "Name=vpc-id,Values=$VPC_ID" \
+        "Name=tag:awsbnkctl:cluster,Values=$CLUSTER_NAME" \
+        "Name=tag:bnk.f5.com/datapath,Values=internal" \
+    --query "NetworkInterfaces[0].NetworkInterfaceId" --output text 2>/dev/null || echo "None")
+
+BNK_INSTANCE_ID="None"
+if [ -n "$EXT_ENI_ID" ] && [ "$EXT_ENI_ID" != "None" ]; then
+    BNK_INSTANCE_ID=$(aws ec2 describe-network-interfaces \
+        --network-interface-ids "$EXT_ENI_ID" \
+        --query "NetworkInterfaces[0].Attachment.InstanceId" --output text 2>/dev/null || echo "None")
+fi
+if [ -z "$BNK_INSTANCE_ID" ] || [ "$BNK_INSTANCE_ID" == "None" ]; then
+    K8S_PROVIDER_ID=$(kubectl get nodes -l role=bnk -o jsonpath='{.items[0].spec.providerID}' 2>/dev/null || true)
+    if [ -n "$K8S_PROVIDER_ID" ]; then
+        BNK_INSTANCE_ID="${K8S_PROVIDER_ID##*/}"
+    fi
+fi
 if [ -z "$BNK_INSTANCE_ID" ] || [ "$BNK_INSTANCE_ID" == "None" ]; then
     BNK_INSTANCE_ID=$(aws ec2 describe-instances \
         --filters \
             "Name=vpc-id,Values=$VPC_ID" \
             "Name=instance-state-name,Values=running" \
-        --query "Reservations[].Instances[?length(NetworkInterfaces) >= \`3\` && !contains(Tags[?Key=='Name'].Value | [0] || '', 'jumphost')][].InstanceId | [0]" --output text 2>/dev/null || echo "None")
+        --query "Reservations[].Instances[?length(NetworkInterfaces) >= \`3\` && !contains(Tags[?Key=='Name'].Value | [0] || '', 'jumphost') && !contains(Tags[?Key=='Name'].Value | [0] || '', 'stranger')][].InstanceId | [0]" --output text 2>/dev/null || echo "None")
 fi
 
 if [ -n "$BNK_INSTANCE_ID" ] && [ "$BNK_INSTANCE_ID" != "None" ]; then
     echo "Found BNK worker instance: $BNK_INSTANCE_ID"
     PRIMARY_ENI_ID=$(aws ec2 describe-instances --instance-ids "$BNK_INSTANCE_ID" \
         --query "Reservations[0].Instances[0].NetworkInterfaces[?Attachment.DeviceIndex==\`0\`].NetworkInterfaceId | [0]" --output text)
-    EXT_ENI_ID=$(aws ec2 describe-instances --instance-ids "$BNK_INSTANCE_ID" \
-        --query "Reservations[0].Instances[0].NetworkInterfaces[?starts_with(PrivateIpAddress, \`10.0.10.\`)].NetworkInterfaceId | [0]" --output text)
-    INT_ENI_ID=$(aws ec2 describe-instances --instance-ids "$BNK_INSTANCE_ID" \
-        --query "Reservations[0].Instances[0].NetworkInterfaces[?starts_with(PrivateIpAddress, \`10.0.20.\`)].NetworkInterfaceId | [0]" --output text)
+
+    EXT_SUBNET_ID=$(aws ec2 describe-subnets \
+        --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:awsbnkctl:cluster,Values=$CLUSTER_NAME" "Name=tag:awsbnkctl:component,Values=subnet-bnk-ext" \
+        --query "Subnets[0].SubnetId" --output text 2>/dev/null || echo "None")
+    INT_SUBNET_ID=$(aws ec2 describe-subnets \
+        --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:awsbnkctl:cluster,Values=$CLUSTER_NAME" "Name=tag:awsbnkctl:component,Values=subnet-bnk-int" \
+        --query "Subnets[0].SubnetId" --output text 2>/dev/null || echo "None")
+
+    if { [ -z "$EXT_ENI_ID" ] || [ "$EXT_ENI_ID" == "None" ]; } && [ -n "$EXT_SUBNET_ID" ] && [ "$EXT_SUBNET_ID" != "None" ]; then
+        EXT_ENI_ID=$(aws ec2 describe-instances --instance-ids "$BNK_INSTANCE_ID" \
+            --query "Reservations[0].Instances[0].NetworkInterfaces[?SubnetId=='$EXT_SUBNET_ID'].NetworkInterfaceId | [0]" --output text)
+    fi
+    if { [ -z "$INT_ENI_ID" ] || [ "$INT_ENI_ID" == "None" ]; } && [ -n "$INT_SUBNET_ID" ] && [ "$INT_SUBNET_ID" != "None" ]; then
+        INT_ENI_ID=$(aws ec2 describe-instances --instance-ids "$BNK_INSTANCE_ID" \
+            --query "Reservations[0].Instances[0].NetworkInterfaces[?SubnetId=='$INT_SUBNET_ID'].NetworkInterfaceId | [0]" --output text)
+    fi
+
+    EXT_SUBNET_CIDR=""
+    if [ -n "$EXT_ENI_ID" ] && [ "$EXT_ENI_ID" != "None" ]; then
+        EXT_ENI_SUBNET=$(aws ec2 describe-network-interfaces --network-interface-ids "$EXT_ENI_ID" --query "NetworkInterfaces[0].SubnetId" --output text 2>/dev/null || echo "")
+        if [ -n "$EXT_ENI_SUBNET" ] && [ "$EXT_ENI_SUBNET" != "None" ]; then
+            EXT_SUBNET_CIDR=$(aws ec2 describe-subnets --subnet-ids "$EXT_ENI_SUBNET" --query "Subnets[0].CidrBlock" --output text 2>/dev/null || echo "")
+        fi
+    fi
+    EXT_SUBNET_CIDR="${EXT_SUBNET_CIDR:-10.0.10.0/24}"
+    EXT_PREFIX="${EXT_SUBNET_CIDR%.*}"
+
+    INT_SUBNET_CIDR=""
+    if [ -n "$INT_ENI_ID" ] && [ "$INT_ENI_ID" != "None" ]; then
+        INT_ENI_SUBNET=$(aws ec2 describe-network-interfaces --network-interface-ids "$INT_ENI_ID" --query "NetworkInterfaces[0].SubnetId" --output text 2>/dev/null || echo "")
+        if [ -n "$INT_ENI_SUBNET" ] && [ "$INT_ENI_SUBNET" != "None" ]; then
+            INT_SUBNET_CIDR=$(aws ec2 describe-subnets --subnet-ids "$INT_ENI_SUBNET" --query "Subnets[0].CidrBlock" --output text 2>/dev/null || echo "")
+        fi
+    fi
+    INT_SUBNET_CIDR="${INT_SUBNET_CIDR:-10.0.20.0/24}"
+    INT_PREFIX="${INT_SUBNET_CIDR%.*}"
+
+    DISC_AIGW_VIP=$(kubectl get gateway aigw-gateway -n "$BNK_NS" -o jsonpath='{.spec.addresses[0].value}' 2>/dev/null || true)
+    AIGW_VIP="${AIGW_VIP:-${DISC_AIGW_VIP:-${EXT_PREFIX}.151}}"
 
     for ENI_ID in "$PRIMARY_ENI_ID" "$EXT_ENI_ID" "$INT_ENI_ID"; do
         if [ -n "$ENI_ID" ] && [ "$ENI_ID" != "None" ]; then
@@ -172,8 +234,10 @@ if [ -n "$BNK_INSTANCE_ID" ] && [ "$BNK_INSTANCE_ID" != "None" ]; then
     done
 
     if [ -n "$EXT_ENI_ID" ] && [ "$EXT_ENI_ID" != "None" ]; then
+        EXT_VLAN_IPS=$(kubectl get f5-big-net-vlan external-vlan -n "$BNK_NS" -o jsonpath='{.spec.interfaces[0].selfIps[*]}' 2>/dev/null | tr ' ' '\n' | sed 's|/.*||' | tr '\n' ' ' || true)
         echo "Assigning secondary private VIPs ($VIP_IP, $AIGW_VIP) and SelfIPs onto external TMM ENI $EXT_ENI_ID..."
-        for IP in "$VIP_IP" "$AIGW_VIP" "10.0.10.10" "10.0.10.11" "10.0.10.12"; do
+        for IP in "$VIP_IP" "$AIGW_VIP" $EXT_VLAN_IPS "${EXT_PREFIX}.10" "${EXT_PREFIX}.11" "${EXT_PREFIX}.12"; do
+            [ -n "$IP" ] || continue
             aws ec2 assign-private-ip-addresses \
                 --network-interface-id "$EXT_ENI_ID" \
                 --private-ip-addresses "$IP" \
@@ -182,8 +246,10 @@ if [ -n "$BNK_INSTANCE_ID" ] && [ "$BNK_INSTANCE_ID" != "None" ]; then
     fi
 
     if [ -n "$INT_ENI_ID" ] && [ "$INT_ENI_ID" != "None" ]; then
+        INT_VLAN_IPS=$(kubectl get f5-big-net-vlan internal-vlan -n "$BNK_NS" -o jsonpath='{.spec.interfaces[0].selfIps[*]}' 2>/dev/null | tr ' ' '\n' | sed 's|/.*||' | tr '\n' ' ' || true)
         echo "Ensuring internal SelfIPs are assigned onto internal TMM ENI $INT_ENI_ID..."
-        for IP in "10.0.20.10" "10.0.20.11" "10.0.20.12"; do
+        for IP in $INT_VLAN_IPS "${INT_PREFIX}.10" "${INT_PREFIX}.11" "${INT_PREFIX}.12"; do
+            [ -n "$IP" ] || continue
             aws ec2 assign-private-ip-addresses \
                 --network-interface-id "$INT_ENI_ID" \
                 --private-ip-addresses "$IP" \
@@ -194,7 +260,7 @@ if [ -n "$BNK_INSTANCE_ID" ] && [ "$BNK_INSTANCE_ID" != "None" ]; then
     # Program VPC route tables:
     # 1. Private worker subnet RTBs & int-subnet RTB: /32 VIP routes -> EXT_ENI_ID
     # 2. ext-subnet RTB: 0.0.0.0/0 -> NAT Gateway
-    # 3. ext-subnet RTB & int-subnet RTB: 172.20.0.0/16 -> PRIMARY_ENI_ID
+    # 3. ext-subnet RTB & int-subnet RTB: $SERVICE_CIDR -> PRIMARY_ENI_ID
     NAT_GW_ID=$(aws ec2 describe-nat-gateways \
         --filter "Name=vpc-id,Values=$VPC_ID" "Name=state,Values=available" \
         --query "NatGateways[0].NatGatewayId" --output text 2>/dev/null || echo "None")
@@ -256,32 +322,37 @@ if [ -n "$BNK_INSTANCE_ID" ] && [ "$BNK_INSTANCE_ID" != "None" ]; then
         done
     fi
 
-    # Program BNK worker node link-up (ens5/ens6), conntrack liberal mode, and iptables Service CIDR NAT
+    # Dynamically bring up all PCI NICs, enable liberal conntrack, and program iptables Service CIDR NAT
     aws ssm send-command \
         --instance-ids "$BNK_INSTANCE_ID" \
         --document-name "AWS-RunShellScript" \
-        --parameters 'commands=[
-          "ip link set ens5 up 2>/dev/null || true",
-          "ip link set ens6 up 2>/dev/null || true",
-          "sysctl -w net.ipv4.ip_forward=1",
-          "sysctl -w net.netfilter.nf_conntrack_tcp_be_liberal=1 2>/dev/null || true",
-          "iptables -C FORWARD -m conntrack --ctstate INVALID -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -m conntrack --ctstate INVALID -j ACCEPT",
-          "iptables -t nat -C PREROUTING -s 10.0.10.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s 10.0.10.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES",
-          "iptables -t nat -C PREROUTING -s 10.0.20.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s 10.0.20.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES",
-          "iptables -t nat -C POSTROUTING -s 10.0.10.0/24 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.0.10.0/24 -j MASQUERADE",
-          "iptables -t nat -C POSTROUTING -s 10.0.20.0/24 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.0.20.0/24 -j MASQUERADE"
-        ]' >/dev/null 2>&1 || true
+        --parameters "commands=[
+          \"for d in /sys/class/net/*; do [ -e \\\"\\\$d/device\\\" ] || continue; dev=\\\$(basename \\\"\\\$d\\\"); ip link set \\\"\\\$dev\\\" up 2>/dev/null || true; ethtool -K \\\"\\\$dev\\\" tso off gso off gro off tx-nocache-copy off 2>/dev/null || true; done\",
+          \"sysctl -w net.ipv4.ip_forward=1\",
+          \"sysctl -w net.netfilter.nf_conntrack_tcp_be_liberal=1 2>/dev/null || true\",
+          \"iptables -C FORWARD -m conntrack --ctstate INVALID -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -m conntrack --ctstate INVALID -j ACCEPT\",
+          \"iptables -t nat -C PREROUTING -s ${EXT_SUBNET_CIDR} -d ${SERVICE_CIDR} -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s ${EXT_SUBNET_CIDR} -d ${SERVICE_CIDR} -j KUBE-SERVICES\",
+          \"iptables -t nat -C PREROUTING -s ${INT_SUBNET_CIDR} -d ${SERVICE_CIDR} -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s ${INT_SUBNET_CIDR} -d ${SERVICE_CIDR} -j KUBE-SERVICES\",
+          \"iptables -t nat -C POSTROUTING -s ${EXT_SUBNET_CIDR} -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s ${EXT_SUBNET_CIDR} -j MASQUERADE\",
+          \"iptables -t nat -C POSTROUTING -s ${INT_SUBNET_CIDR} -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s ${INT_SUBNET_CIDR} -j MASQUERADE\"
+        ]" >/dev/null 2>&1 || true
 
     for HP_POD in $(kubectl get pods -n kube-system -l app=hugepages-setup -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-        kubectl exec -n kube-system "$HP_POD" -- nsenter -t 1 -m -u -i -n -p -- sh -c '
+        kubectl exec -n kube-system "$HP_POD" -- nsenter -t 1 -m -u -i -n -p -- sh -c "
+            for d in /sys/class/net/*; do
+                [ -e \"\$d/device\" ] || continue
+                dev=\$(basename \"\$d\")
+                ip link set \"\$dev\" up 2>/dev/null || true
+                ethtool -K \"\$dev\" tso off gso off gro off tx-nocache-copy off 2>/dev/null || true
+            done
             sysctl -qw net.ipv4.ip_forward=1
             sysctl -qw net.netfilter.nf_conntrack_tcp_be_liberal=1 2>/dev/null || true
             iptables -C FORWARD -m conntrack --ctstate INVALID -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -m conntrack --ctstate INVALID -j ACCEPT || true
-            iptables -t nat -C PREROUTING -s 10.0.10.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s 10.0.10.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES || true
-            iptables -t nat -C PREROUTING -s 10.0.20.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s 10.0.20.0/24 -d 172.20.0.0/16 -j KUBE-SERVICES || true
-            iptables -t nat -C POSTROUTING -s 10.0.10.0/24 -d 10.0.0.0/16 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.0.10.0/24 -d 10.0.0.0/16 -j MASQUERADE || true
-            iptables -t nat -C POSTROUTING -s 10.0.20.0/24 -d 10.0.0.0/16 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.0.20.0/24 -d 10.0.0.0/16 -j MASQUERADE || true
-        ' >/dev/null 2>&1 || true
+            iptables -t nat -C PREROUTING -s ${EXT_SUBNET_CIDR} -d ${SERVICE_CIDR} -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s ${EXT_SUBNET_CIDR} -d ${SERVICE_CIDR} -j KUBE-SERVICES || true
+            iptables -t nat -C PREROUTING -s ${INT_SUBNET_CIDR} -d ${SERVICE_CIDR} -j KUBE-SERVICES 2>/dev/null || iptables -t nat -I PREROUTING 1 -s ${INT_SUBNET_CIDR} -d ${SERVICE_CIDR} -j KUBE-SERVICES || true
+            iptables -t nat -C POSTROUTING -s ${EXT_SUBNET_CIDR} -d ${VPC_CIDR} -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s ${EXT_SUBNET_CIDR} -d ${VPC_CIDR} -j MASQUERADE || true
+            iptables -t nat -C POSTROUTING -s ${INT_SUBNET_CIDR} -d ${VPC_CIDR} -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s ${INT_SUBNET_CIDR} -d ${VPC_CIDR} -j MASQUERADE || true
+        " >/dev/null 2>&1 || true
     done
 
     # Re-trigger F5BigFwPolicy/mcp-firewall reconciliation so f5-afm (pccd) pushes ACL blobs over 9222

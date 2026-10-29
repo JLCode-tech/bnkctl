@@ -40,8 +40,17 @@ if [ -z "${KUBECONFIG:-}" ]; then
   done
 fi
 export KUBECONFIG="${KUBECONFIG:-}"
-REGION="${REGION:-ap-southeast-2}"
-VIP="${VIP:-10.0.10.150}"
+CFG="${CFG:-$DEMO_DIR/cluster.yaml}"
+CFG_REGION=""
+if [ -f "$CFG" ]; then
+  CFG_REGION=$(awk '/^  region:/{print $2; exit}' "$CFG" 2>/dev/null || true)
+fi
+REGION="${REGION:-${AWS_REGION:-${CFG_REGION:-ap-southeast-2}}}"
+DISC_VIP=""
+if [ -n "$KUBECONFIG" ] && [ -f "$KUBECONFIG" ]; then
+  DISC_VIP=$(kubectl get gateway "$GW" -n default -o jsonpath='{.spec.addresses[0].value}' 2>/dev/null || true)
+fi
+VIP="${VIP:-${DISC_VIP:-10.0.10.150}}"
 INGRESS_HOST="${INGRESS_HOST:-bnk-ingress.bnk-demo.internal}"
 RUNTIME="${RUNTIME:-FinanceAgentV2Agent}"
 TARGET="${TARGET:-demo-v2}"

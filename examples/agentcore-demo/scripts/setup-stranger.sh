@@ -47,8 +47,14 @@ set -euo pipefail
 # (it is listed in PUBLIC_SUBNETS in state.env). Leave the instance running and
 # `down` aborts at phase 03 with a DependencyViolation on its own subnet.
 
+DEMO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CFG="${CFG:-$DEMO_DIR/cluster.yaml}"
 CLUSTER_NAME="${1:-bnk-agentcore-demo}"
-REGION="${AWS_REGION:-$(aws configure get region 2>/dev/null || echo "ap-southeast-2")}"
+CFG_REGION=""
+if [ -f "$CFG" ]; then
+    CFG_REGION=$(awk '/^  region:/{print $2; exit}' "$CFG" 2>/dev/null || true)
+fi
+REGION="${AWS_REGION:-${CFG_REGION:-$(aws configure get region 2>/dev/null || echo "ap-southeast-2")}}"
 export AWS_DEFAULT_REGION="$REGION"
 
 STRANGER_CIDR="${STRANGER_CIDR:-100.64.0.0/16}"
@@ -67,13 +73,28 @@ VPC_ID=$(aws ec2 describe-vpcs \
 [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ] && { echo "No VPC for $CLUSTER_NAME"; exit 1; }
 note "VPC: $VPC_ID"
 
-# public-1 / subnet-public-2 is where the stranger lives: different subnet AND
-# different AZ from the VIP, which is what makes it a fair test.
-PUB2_ID=$(aws ec2 describe-subnets \
+# Pick a public subnet in a different AZ from the BNK external datapath subnet
+# when multi-AZ is available; fall back to any public subnet in the VPC.
+EXT_AZ=$(aws ec2 describe-subnets \
     --filters "Name=vpc-id,Values=${VPC_ID}" \
-              "Name=tag:Name,Values=${CLUSTER_NAME}-public-1,${CLUSTER_NAME}-subnet-public-2" \
-    --query "Subnets[0].SubnetId" --output text)
-[ "$PUB2_ID" = "None" ] || [ -z "$PUB2_ID" ] && { echo "No public-1 / subnet-public-2 found"; exit 1; }
+              "Name=tag:awsbnkctl:cluster,Values=${CLUSTER_NAME}" \
+              "Name=tag:awsbnkctl:component,Values=subnet-bnk-ext" \
+    --query "Subnets[0].AvailabilityZone" --output text 2>/dev/null || echo "")
+PUB2_ID=""
+if [ -n "$EXT_AZ" ] && [ "$EXT_AZ" != "None" ]; then
+    PUB2_ID=$(aws ec2 describe-subnets \
+        --filters "Name=vpc-id,Values=${VPC_ID}" \
+                  "Name=tag:awsbnkctl:cluster,Values=${CLUSTER_NAME}" \
+                  "Name=tag:awsbnkctl:component,Values=subnet-public" \
+        --query "Subnets[?AvailabilityZone!='${EXT_AZ}'].SubnetId | [0]" --output text 2>/dev/null || echo "")
+fi
+if [ -z "$PUB2_ID" ] || [ "$PUB2_ID" = "None" ]; then
+    PUB2_ID=$(aws ec2 describe-subnets \
+        --filters "Name=vpc-id,Values=${VPC_ID}" \
+                  "Name=tag:Name,Values=${CLUSTER_NAME}-public-1,${CLUSTER_NAME}-subnet-public-2,${CLUSTER_NAME}-public-0,${CLUSTER_NAME}-subnet-public-1" \
+        --query "Subnets[0].SubnetId" --output text 2>/dev/null || echo "None")
+fi
+[ "$PUB2_ID" = "None" ] || [ -z "$PUB2_ID" ] && { echo "No public subnet found in $VPC_ID"; exit 1; }
 PUB2_AZ=$(aws ec2 describe-subnets --subnet-ids "$PUB2_ID" \
     --query "Subnets[0].AvailabilityZone" --output text)
 note "stranger subnet: $PUB2_ID ($PUB2_AZ)"

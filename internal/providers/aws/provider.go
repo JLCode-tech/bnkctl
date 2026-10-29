@@ -14,6 +14,9 @@ import (
 	"github.com/JLCode-tech/bnkctl/pkg/jumphost"
 	"github.com/JLCode-tech/bnkctl/pkg/provider"
 	"github.com/JLCode-tech/bnkctl/pkg/state"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -439,6 +442,52 @@ func (p *Provider) attachHooks(u *provider.UnderlayContext, cl *intent.Cluster, 
 			intPCI = st.Get("INTERNAL_PCI")
 			if intPCI == "" {
 				intPCI = st.Get("INT_PCI_BDF")
+			}
+		}
+		if (extPCI == "" || (u.InternalNetwork() != nil && intPCI == "")) && p.Clients != nil && p.Clients.PhaseEC2 != nil && u.ClusterName != "" {
+			if out, derr := p.Clients.PhaseEC2.DescribeNetworkInterfaces(ctx, &ec2.DescribeNetworkInterfacesInput{
+				Filters: []ec2types.Filter{
+					{Name: aws.String("tag:awsbnkctl:cluster"), Values: []string{u.ClusterName}},
+				},
+			}); derr == nil && out != nil {
+				for _, ni := range out.NetworkInterfaces {
+					dpRole := ""
+					ifName := ""
+					pciAddr := ""
+					for _, t := range ni.TagSet {
+						if t.Key == nil || t.Value == nil {
+							continue
+						}
+						switch *t.Key {
+						case "bnk.f5.com/datapath":
+							dpRole = *t.Value
+						case "bnk.f5.com/ifname":
+							ifName = *t.Value
+						case hostDeviceTagKey:
+							if ifName == "" && *t.Value != "external" && *t.Value != "internal" {
+								ifName = *t.Value
+							}
+						case "bnk.f5.com/pci":
+							pciAddr = *t.Value
+						}
+					}
+					switch dpRole {
+					case "external":
+						if ifName != "" {
+							extIfName = ifName
+						}
+						if pciAddr != "" && extPCI == "" {
+							extPCI = pciAddr
+						}
+					case "internal":
+						if ifName != "" {
+							intIfName = ifName
+						}
+						if pciAddr != "" && intPCI == "" {
+							intPCI = pciAddr
+						}
+					}
+				}
 			}
 		}
 		var names []string

@@ -14,8 +14,13 @@ CFG="${CFG:-${DEMO_DIR}/cluster.yaml}"
 BNK_NS="${BNK_NS:-f5-cne-system}"
 TENANT="${TENANT:-default-tenant}"
 ROUTE_NAME="${ROUTE_NAME:-llm-chat-route}"
-AIGW_VIP="${AIGW_VIP:-10.0.10.151}"
-TMM_EGRESS_GATEWAY="${TMM_EGRESS_GATEWAY:-10.0.10.1}"
+EXT_SELFIP_CIDR="$(kubectl get f5-big-net-vlan external-vlan -n "${BNK_NS}" -o jsonpath='{.spec.interfaces[0].selfIps[0]}' 2>/dev/null || true)"
+EXT_OCTETS="${EXT_SELFIP_CIDR%.*}"
+if [ -z "${EXT_OCTETS}" ]; then
+  EXT_OCTETS="10.0.10"
+fi
+AIGW_VIP="${AIGW_VIP:-${EXT_OCTETS}.151}"
+TMM_EGRESS_GATEWAY="${TMM_EGRESS_GATEWAY:-${EXT_OCTETS}.1}"
 FORGE_URL="${FORGE_URL:-http://localhost:8000}"
 
 if [ -z "${BEDROCK_PRIMARY_API_KEY:-}" ] || [ "${BEDROCK_PRIMARY_API_KEY}" = "replace-with-bedrock-primary-api-key" ]; then
