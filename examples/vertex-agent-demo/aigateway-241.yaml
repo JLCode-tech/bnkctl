@@ -61,11 +61,10 @@ metadata:
 spec:
   tenantRef:
     name: default-tenant
-  type: Gemini
-  vendor: Gemini
-  endpointURL: "https://australia-southeast1-aiplatform.googleapis.com/v1beta1/projects/YOUR_GCP_PROJECT_ID/locations/australia-southeast1/endpoints/openapi"
-  gemini:
+  vendor: Generic
+  generic:
     baseURL: "https://australia-southeast1-aiplatform.googleapis.com/v1beta1/projects/YOUR_GCP_PROJECT_ID/locations/australia-southeast1/endpoints/openapi"
+    catalogVendor: Gemini
   credentialRef:
     name: vertex-gemini-primary-cred
   enabled: true
@@ -102,11 +101,10 @@ metadata:
 spec:
   tenantRef:
     name: default-tenant
-  type: Gemini
-  vendor: Gemini
-  endpointURL: "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/YOUR_GCP_PROJECT_ID/locations/us-central1/endpoints/openapi"
-  gemini:
+  vendor: Generic
+  generic:
     baseURL: "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/YOUR_GCP_PROJECT_ID/locations/us-central1/endpoints/openapi"
+    catalogVendor: Gemini
   credentialRef:
     name: vertex-gemini-fallback-cred
   enabled: true
@@ -129,8 +127,8 @@ spec:
     - name: primary
       providerRef:
         name: vertex-gemini-australia-southeast1
-      upstream: google/gemini-2.5-pro
-      dialects: ["OpenAIChat"]
+      upstream: google/gemini-2.5-flash
+      dialects: ["openai"]
       weight: 80
       state: Active
       pricing:
@@ -139,8 +137,8 @@ spec:
     - name: fallback
       providerRef:
         name: vertex-gemini-us-central1-fallback
-      upstream: google/gemini-2.5-flash
-      dialects: ["OpenAIChat"]
+      upstream: google/gemini-2.5-pro
+      dialects: ["openai"]
       weight: 20
       state: Active
       pricing:
@@ -162,8 +160,8 @@ spec:
     - name: primary
       providerRef:
         name: vertex-gemini-australia-southeast1
-      upstream: google/gemini-2.5-pro
-      dialects: ["OpenAIChat"]
+      upstream: google/gemini-2.5-flash
+      dialects: ["openai"]
       weight: 80
       state: Active
       pricing:
@@ -172,8 +170,8 @@ spec:
     - name: fallback
       providerRef:
         name: vertex-gemini-us-central1-fallback
-      upstream: google/gemini-2.5-flash
-      dialects: ["OpenAIChat"]
+      upstream: google/gemini-2.5-pro
+      dialects: ["openai"]
       weight: 20
       state: Active
       pricing:
@@ -190,6 +188,28 @@ metadata:
 spec:
   controllerName: f5.com/f5-cne-system-f5-cne-controller
   description: F5 BIG-IP Next for Kubernetes 2.4.1 LLM GatewayClass
+---
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: GatewaySettings
+metadata:
+  name: bnk-gateway-settings
+  namespace: f5-cne-system
+spec:
+  egressConfigs:
+  - hardwareAcceleration: none
+    name: default-egress
+    networkRef:
+      name: external
+    sourceNATConfig:
+      type: Automap
+  ingressConfig:
+    defaultListenerNetwork:
+      ipamRefs:
+      - name: listener-pool
+      networkRefs:
+      - name: external
+      sourceNATConfig:
+        type: Automap
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
@@ -236,48 +256,6 @@ spec:
         request: 300s
         backendRequest: 300s
 ---
-# vLLM Semantic Router workload Service + cross-namespace ExternalName Service (Manual Section 4.5.5)
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: vllm-semantic-router-system
-  labels:
-    app.kubernetes.io/part-of: bnk-vertex-demo
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: vsr-service
-  namespace: vllm-semantic-router-system
-  labels:
-    app.kubernetes.io/name: vllm-semantic-router
-    app.kubernetes.io/part-of: bnk-vertex-demo
-spec:
-  selector:
-    app.kubernetes.io/name: vllm-semantic-router
-  ports:
-    - name: http
-      port: 8000
-      targetPort: 8000
-      protocol: TCP
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: vllmsr
-  namespace: f5-cne-system
-  labels:
-    app.kubernetes.io/part-of: bnk-vertex-demo
-    app.kubernetes.io/component: semantic-router-bridge
-spec:
-  type: ExternalName
-  externalName: vsr-service.vllm-semantic-router-system.svc.cluster.local
-  ports:
-    - name: http
-      port: 8000
-      targetPort: 8000
-      protocol: TCP
----
 apiVersion: inference.k8s.f5.com/v1alpha1
 kind: AIGatewayProfile
 metadata:
@@ -294,14 +272,7 @@ spec:
   tenantRef:
     name: default-tenant
   auth:
-    virtualKeys:
-      required: true
-  modelRouting:
-    semanticRouter:
-      serviceRef:
-        name: vllmsr
-        port: 8000
-      timeout: 5s
+    virtualKeys: {}
   failover:
     on429: true
     on5xx: true
@@ -310,12 +281,10 @@ spec:
     honorRetryAfter: true
   promptCache: {}
   providers:
-    - name: vertex-gemini-australia-southeast1
-      credentialRef:
-        name: vertex-gemini-primary-cred
-    - name: vertex-gemini-us-central1-fallback
-      credentialRef:
-        name: vertex-gemini-fallback-cred
+    - providerRef:
+        name: vertex-gemini-australia-southeast1
+    - providerRef:
+        name: vertex-gemini-us-central1-fallback
 ---
 apiVersion: gateway.k8s.f5.com/v1alpha1
 kind: AppPolicy
@@ -337,7 +306,7 @@ spec:
 ---
 # ------------------------------------------------------------------------------
 # Step 5: TMM DNS Resolver in f5-cne-system (F5BigDnsCache/aigw-dns-resolver)
-# Forwards root zone ("") queries to cluster DNS and 8.8.8.8 / 1.1.1.1
+# Forwards root zone (".") queries to 8.8.8.8 / 1.1.1.1 over external Cloud NAT
 # ------------------------------------------------------------------------------
 apiVersion: k8s.f5net.com/v1
 kind: F5BigDnsCache
@@ -354,11 +323,10 @@ spec:
     forwardZones:
       - forwardZone: "."
         nameServers:
-          - ipAddress: 10.96.0.10
-            port: 53
           - ipAddress: 8.8.8.8
             port: 53
           - ipAddress: 1.1.1.1
             port: 53
+
 
 

@@ -2,10 +2,10 @@ apiVersion: azrbnkctl/v1
 kind: Cluster
 
 metadata:
-  name: poc-dual-interface
+  name: bnk-agentfoundry-demo
   subscriptionId: 00000000-0000-0000-0000-000000000000
-  location: eastus2
-  resourceGroup: f5-bigip-ve-demo-rg
+  location: australiaeast
+  resourceGroup: azrbnkctl-bnk-agentfoundry-demo-rg
 
 pattern: dual-interface
 
@@ -49,13 +49,16 @@ bnk:
 
 egress:
   enabled: true
-  namespace: "bnk-demo"
+  namespace: "default"
   port: 4789
 
 forge:
   enabled: true
   url: http://localhost:8000
   mcpUrl: http://localhost:8081/mcp/
+  projectName: azrbnkctl-bnk-agentfoundry-demo
+  projectType: cloud-azure
+  cloudProvider: azure
   credentialTemplateId: 3
   username: admin
   password: admin123

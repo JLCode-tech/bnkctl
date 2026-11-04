@@ -64,7 +64,7 @@ spec:
   vendor: Bedrock
   bedrock:
     region: "ap-southeast-2"
-    baseURL: "https://bedrock-runtime.ap-southeast-2.amazonaws.com/openai/v1"
+    baseURL: "https://bedrock-runtime.ap-southeast-2.amazonaws.com"
   credentialRef:
     name: bedrock-primary-cred
   enabled: true
@@ -104,7 +104,7 @@ spec:
   vendor: Bedrock
   bedrock:
     region: "us-east-1"
-    baseURL: "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1"
+    baseURL: "https://bedrock-runtime.us-east-1.amazonaws.com"
   credentialRef:
     name: bedrock-fallback-cred
   enabled: true

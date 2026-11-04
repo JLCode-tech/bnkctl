@@ -103,8 +103,9 @@ ok "pull secret + license present"
 step "awsbnkctl up  (EKS + BNK — the long one, ~30-45 min)"
 note "running from $REPO_ROOT so state.env lands where 'down' will look for it"
 cd "$REPO_ROOT" || die "cannot cd to repo root"
-if [ -f "$KC" ] && kubectl --kubeconfig "$KC" get --raw=/readyz >/dev/null 2>&1; then
-  ok "cluster already up and answering — skipping"
+if [ -f "$KC" ] && kubectl --kubeconfig "$KC" get --raw=/readyz >/dev/null 2>&1 \
+   && kubectl --kubeconfig "$KC" get gatewayclass "${CLUSTER}-gatewayclass" >/dev/null 2>&1; then
+  ok "cluster and BNK data plane already up — skipping"
 else
   ./awsbnkctl up --config "$CONFIG" || die "up failed — read the phase output above"
   ok "up complete"

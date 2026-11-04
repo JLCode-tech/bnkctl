@@ -1,10 +1,69 @@
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
+  name: bnk-agentfoundry-demo-gatewayclass
+spec:
+  controllerName: f5.com/f5-cne-system-f5-cne-controller
+  description: F5 BIG-IP Kubernetes Gateway
+  parametersRef:
+    group: gateway.k8s.f5.com
+    kind: GatewaySettings
+    name: azrbnkctl-default
+    namespace: default
+---
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: GatewaySettings
+metadata:
+  name: bnk-gateway-settings
+  namespace: default
+spec:
+  egressConfigs:
+  - name: default-egress
+    networkRef:
+      name: external
+    sourceNATConfig:
+      type: Automap
+---
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: GatewaySettings
+metadata:
+  name: bnk-gateway-settings
+  namespace: f5-cne-system
+spec:
+  egressConfigs:
+  - name: default-egress
+    networkRef:
+      name: external
+    sourceNATConfig:
+      type: Automap
+  ingressConfig:
+    defaultListenerNetwork:
+      ipamRefs:
+      - name: listener-pool
+      networkRefs:
+      - name: external
+      sourceNATConfig:
+        type: Automap
+  sourceNATPools:
+  - name: egress-snat-pool
+    ipamRefs:
+    - name: ext-ipam
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
   name: poc-dual-interface-gatewayclass
 spec:
   controllerName: f5.com/f5-cne-system-f5-cne-controller
   description: F5 BIG-IP Kubernetes Gateway
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: mcp-selfsigned-issuer
+  namespace: default
+spec:
+  selfSigned: {}
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -19,14 +78,73 @@ spec:
   dnsNames:
   - bnk-ingress.bnk-demo.internal
   issuerRef:
-    name: poc-dual-interface-ca-cluster-issuer
-    kind: ClusterIssuer
+    name: mcp-selfsigned-issuer
+    kind: Issuer
     group: cert-manager.io
 ---
 apiVersion: v1
 kind: Namespace
 metadata:
   name: agentfoundry
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentfoundry-egress-sentinel
+  namespace: agentfoundry
+  labels:
+    app: agentfoundry-egress-sentinel
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agentfoundry-egress-sentinel
+  template:
+    metadata:
+      labels:
+        app: agentfoundry-egress-sentinel
+    spec:
+      containers:
+      - name: sentinel
+        image: python:3.11-slim
+        command: ["sleep", "infinity"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 50m
+            memory: 64Mi
+---
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: GatewaySettings
+metadata:
+  name: bnk-gateway-settings
+  namespace: agentfoundry
+spec:
+  egressConfigs:
+  - name: default-egress
+    networkRef:
+      name: external
+    sourceNATConfig:
+      type: Automap
+---
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: EgressGateway
+metadata:
+  name: egress-gw
+  namespace: default
+spec:
+  gatewayClassName: bnk-agentfoundry-demo-gatewayclass
+  infrastructure:
+    parametersRef:
+      name: bnk-gateway-settings
+      sectionName: default-egress
+  sourceSelector:
+    selectionMode: NamespaceSelector
+    namespaces:
+      matchNames:
+      - agentfoundry
 ---
 apiVersion: gateway.k8s.f5.com/v1alpha1
 kind: GatewaySettings
@@ -38,7 +156,7 @@ spec:
   - hardwareAcceleration: none
     name: default-egress
     networkRef:
-      name: int-vlan-infra
+      name: internal
     sourceNATConfig:
       type: Automap
   ingressConfig:
@@ -46,7 +164,7 @@ spec:
       ipamRefs:
       - name: listener-pool
       networkRefs:
-      - name: ext-vlan-infra
+      - name: external
       sourceNATConfig:
         type: Automap
 ---
@@ -60,7 +178,7 @@ spec:
   - hardwareAcceleration: none
     name: default-egress
     networkRef:
-      name: int-vlan-infra
+      name: internal
     sourceNATConfig:
       type: Automap
   ingressConfig:
@@ -68,7 +186,7 @@ spec:
       ipamRefs:
       - name: listener-pool
       networkRefs:
-      - name: ext-vlan-infra
+      - name: external
       sourceNATConfig:
         type: Automap
 ---
@@ -88,11 +206,6 @@ spec:
   - name: http
     protocol: HTTP
     port: 80
-    allowedRoutes:
-      namespaces:
-        from: All
-      kinds:
-      - kind: HTTPRoute
   - name: https
     protocol: HTTPS
     port: 443
@@ -139,6 +252,7 @@ spec:
     backendRefs:
     - name: mcp-financial-tool
       port: 80
+      weight: 1
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -158,3 +272,4 @@ spec:
     backendRefs:
     - name: mcp-financial-tool
       port: 80
+      weight: 1

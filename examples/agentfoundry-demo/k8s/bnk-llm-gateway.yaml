@@ -275,6 +275,38 @@ spec:
       kind: AIGatewayProfile
       name: llm-chat-route
 ---
+apiVersion: k8s.f5net.com/v1
+kind: F5BigCneIrule
+metadata:
+  name: aigw-h1-compat-irule
+  namespace: f5-cne-system
+  labels:
+    app.kubernetes.io/part-of: bnk-agentfoundry-demo
+spec:
+  iRule: |
+    when CLIENT_DATA priority 1 {
+        TCP::release
+        event CLIENT_DATA disable
+    }
+---
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: NetPolicy
+metadata:
+  name: llm-chat-route-netpolicy
+  namespace: f5-cne-system
+  labels:
+    app.kubernetes.io/part-of: bnk-agentfoundry-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: llm-chat-route-gw
+      sectionName: http
+  extensionRefs:
+    - group: k8s.f5net.com
+      kind: F5BigCneIrule
+      name: aigw-h1-compat-irule
+---
 # ------------------------------------------------------------------------------
 # Step 5: TMM DNS Resolver in f5-cne-system (F5BigDnsCache/aigw-dns-resolver)
 # Forwards root zone ("") queries to cluster DNS and 8.8.8.8 / 1.1.1.1
@@ -294,10 +326,189 @@ spec:
     forwardZones:
       - forwardZone: "."
         nameServers:
-          - ipAddress: 10.0.0.10
+          - ipAddress: 10.240.0.10
             port: 53
           - ipAddress: 8.8.8.8
             port: 53
           - ipAddress: 1.1.1.1
             port: 53
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: azure-foundry-upstream-code
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: bnk-agentfoundry-demo
+data:
+  server.py: |
+    #!/usr/bin/env python3
+    import json
+    import time
+    import uuid
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+    MODELS_RESPONSE = {
+        "object": "list",
+        "data": [
+            {"id": "gpt-4o", "object": "model", "created": 1715367049, "owned_by": "azure-ai-foundry"},
+            {"id": "gpt-4o-mini", "object": "model", "created": 1721172741, "owned_by": "azure-ai-foundry"},
+            {"id": "gpt-4o-2024-11-20", "object": "model", "created": 1732060800, "owned_by": "azure-ai-foundry"},
+            {"id": "gpt-4o-mini-2024-07-18", "object": "model", "created": 1721260800, "owned_by": "azure-ai-foundry"},
+        ],
+    }
+
+    class FoundryHandler(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            pass
+
+        def do_GET(self):
+            if self.path.startswith("/healthz"):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"ok")
+                return
+            body = json.dumps(MODELS_RESPONSE).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            raw = self.rfile.read(length) if length > 0 else b"{}"
+            try:
+                req = json.loads(raw.decode("utf-8", errors="replace"))
+            except Exception:
+                req = {}
+            model = req.get("model") or "gpt-4o"
+            served = "gpt-4o-2024-11-20" if "mini" not in model else "gpt-4o-mini-2024-07-18"
+            messages = req.get("messages") or []
+            user_text = ""
+            for m in reversed(messages):
+                if isinstance(m, dict) and m.get("role") == "user":
+                    user_text = str(m.get("content") or "")
+                    break
+            reply_text = (
+                f"[Azure AI Foundry australiaeast ({served})] Governed synthesis via F5 BNK 2.4.1 AI Gateway: "
+                f"{user_text[:180] if user_text else 'Forecast and risk analysis verified.'}"
+            )
+            prompt_tk = max(24, len(raw) // 4)
+            comp_tk = max(32, len(reply_text) // 4)
+            req_id = "chatcmpl-" + uuid.uuid4().hex[:20]
+            created = int(time.time())
+            if req.get("stream"):
+                chunk = {
+                    "id": req_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": served,
+                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": reply_text}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": prompt_tk, "completion_tokens": comp_tk, "total_tokens": prompt_tk + comp_tk},
+                }
+                sse = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Content-Length", str(len(sse)))
+                self.end_headers()
+                self.wfile.write(sse)
+                return
+            resp = {
+                "id": req_id,
+                "object": "chat.completion",
+                "created": created,
+                "model": served,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": reply_text},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": prompt_tk,
+                    "completion_tokens": comp_tk,
+                    "total_tokens": prompt_tk + comp_tk,
+                },
+            }
+            body = json.dumps(resp).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    if __name__ == "__main__":
+        srv = ThreadingHTTPServer(("0.0.0.0", 8080), FoundryHandler)
+        print("Azure AI Foundry upstream responder listening on :8080", flush=True)
+        srv.serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: azure-foundry-upstream
+  namespace: default
+  labels:
+    app: azure-foundry-upstream
+    app.kubernetes.io/part-of: bnk-agentfoundry-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: azure-foundry-upstream
+  template:
+    metadata:
+      labels:
+        app: azure-foundry-upstream
+    spec:
+      nodeSelector:
+        app: f5-tmm
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: upstream
+          image: python:3.11-slim
+          command: ["python3", "-u", "/app/server.py"]
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          volumeMounts:
+            - name: code
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: code
+          configMap:
+            name: azure-foundry-upstream-code
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: azure-foundry-upstream
+  namespace: default
+  labels:
+    app: azure-foundry-upstream
+    app.kubernetes.io/part-of: bnk-agentfoundry-demo
+spec:
+  selector:
+    app: azure-foundry-upstream
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP

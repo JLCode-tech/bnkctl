@@ -495,7 +495,8 @@ aws route53 change-resource-record-sets \
       ]
     }'
 
-cat <<EOF > .agentcore-network-env.json
+ENV_FILE="${ENV_FILE:-$DEMO_DIR/.agentcore-network-env.json}"
+cat <<EOF > "$ENV_FILE"
 {
   "CLUSTER_NAME": "$CLUSTER_NAME",
   "VPC_ID": "$VPC_ID",
@@ -507,6 +508,9 @@ cat <<EOF > .agentcore-network-env.json
   "AGENT_SUBNETS_JSON": $(echo "$AGENT_SUBNETS_JSON" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read().strip()))')
 }
 EOF
+if [ "$PWD" != "$DEMO_DIR" ]; then
+    cp "$ENV_FILE" .agentcore-network-env.json 2>/dev/null || true
+fi
 
 AGENT_SGS_JSON="[\"$AGENT_SG_ID\"]"
 
@@ -529,4 +533,4 @@ if [ -d "$DEMO_DIR/agent/node_modules" ]; then
 fi
 
 echo "AgentCore network seam setup complete."
-echo "Variables written to .agentcore-network-env.json"
+echo "Variables written to $ENV_FILE"

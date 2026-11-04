@@ -33,8 +33,14 @@ set -uo pipefail
 #
 # Safe to re-run: every step tolerates the resource already being gone.
 
+DEMO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CFG="${CFG:-$DEMO_DIR/cluster.yaml}"
 CLUSTER_NAME="${1:-bnk-agentcore-demo}"
-REGION="${AWS_REGION:-$(aws configure get region 2>/dev/null || echo "ap-southeast-2")}"
+CFG_REGION=""
+if [ -f "$CFG" ]; then
+    CFG_REGION=$(awk '/^  region:/{print $2; exit}' "$CFG" 2>/dev/null || true)
+fi
+REGION="${AWS_REGION:-${CFG_REGION:-$(aws configure get region 2>/dev/null || echo "ap-southeast-2")}}"
 export AWS_DEFAULT_REGION="$REGION"
 
 STRANGER_CIDR="${STRANGER_CIDR:-100.64.0.0/16}"

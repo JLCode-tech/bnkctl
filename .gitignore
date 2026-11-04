@@ -80,4 +80,5 @@ venv/
 **/.cache/
 **/.llm-context/
 .agentcore-network-env.json
+.foundry-network-env.json
 traffic-gen.log

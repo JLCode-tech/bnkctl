@@ -335,6 +335,38 @@ spec:
       kind: AIGatewayProfile
       name: llm-chat-route
 ---
+apiVersion: k8s.f5net.com/v1
+kind: F5BigCneIrule
+metadata:
+  name: aigw-h1-compat-irule
+  namespace: f5-cne-system
+  labels:
+    app.kubernetes.io/part-of: bnk-agentfoundry-demo
+spec:
+  iRule: |
+    when CLIENT_DATA priority 1 {
+        TCP::release
+        event CLIENT_DATA disable
+    }
+---
+apiVersion: gateway.k8s.f5.com/v1alpha1
+kind: NetPolicy
+metadata:
+  name: llm-chat-route-netpolicy
+  namespace: f5-cne-system
+  labels:
+    app.kubernetes.io/part-of: bnk-agentfoundry-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: llm-chat-route-gw
+      sectionName: http
+  extensionRefs:
+    - group: k8s.f5net.com
+      kind: F5BigCneIrule
+      name: aigw-h1-compat-irule
+---
 # ------------------------------------------------------------------------------
 # Step 5: TMM DNS Resolver in f5-cne-system (F5BigDnsCache/aigw-dns-resolver)
 # Forwards root zone ("") queries to cluster DNS and 8.8.8.8 / 1.1.1.1

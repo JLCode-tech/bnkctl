@@ -85,7 +85,10 @@ forge:
   enabled: true
   url: http://localhost:8000
   mcpUrl: http://localhost:8081/mcp/
-  credentialTemplateId: 4
+  projectName: gkebnkctl-bnk-vertex-demo
+  projectType: cloud-gcp
+  cloudProvider: gcp
+  credentialTemplateId: 6
   username: admin
   password: admin123
 
