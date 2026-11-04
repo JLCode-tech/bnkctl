@@ -2,6 +2,13 @@
 
 All notable changes to `bnkctl` are documented in this file.
 
+## [2.7.0](https://github.com/JLCode-tech/bnkctl/compare/v2.6.0...v2.7.0) (2026-11-04)
+
+
+### Features
+
+* **provider,render:** add DataplaneTraits contract tests for unified BNK 2.4.1 overlay renderer ([#10](https://github.com/JLCode-tech/bnkctl/issues/10)) ([1be910d](https://github.com/JLCode-tech/bnkctl/commit/1be910da67d1d8464001995dbe0c43fc99817a0f))
+
 ## [2.6.0](https://github.com/JLCode-tech/bnkctl/compare/v2.5.0...v2.6.0) (2026-11-04)
 
 
