@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os/exec"
+	"regexp"
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -16,6 +18,49 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 )
+
+var (
+	reBlockedRG   = regexp.MustCompile(`Deletion of resource group '([^']+)' failed`)
+	reBlockedVMSS = regexp.MustCompile(`Microsoft\.Compute/virtualMachineScaleSets/([a-zA-Z0-9._-]+)`)
+)
+
+func isRetryableAKSDeleteError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "ResourceGroupDeletionBlocked") ||
+		strings.Contains(msg, "Rolling Upgrade") ||
+		strings.Contains(msg, "rolling upgrade")
+}
+
+func isClusterDeletionAlreadyInitiated(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "deletion has been initiated on the cluster")
+}
+
+func cancelBlockingVMSSRollingUpgrades(ctx context.Context, err error) {
+	if err == nil {
+		return
+	}
+	msg := err.Error()
+	rgMatch := reBlockedRG.FindStringSubmatch(msg)
+	if len(rgMatch) < 2 {
+		return
+	}
+	nodeRG := rgMatch[1]
+	matches := reBlockedVMSS.FindAllStringSubmatch(msg, -1)
+	for _, m := range matches {
+		if len(m) < 2 {
+			continue
+		}
+		vmss := m[1]
+		_ = exec.CommandContext(ctx, "az", "vmss", "rolling-upgrade", "cancel", "-g", nodeRG, "-n", vmss).Run()
+	}
+}
 
 // isAzureNotFound returns true only when err is an Azure ARM HTTP 404 or one of
 // the standard NotFound error codes. Non-404 errors (e.g. 409 ScopeLocked, 403
@@ -137,11 +182,11 @@ func PhaseDownCluster(ctx context.Context, c *Clients, cl *intent.Cluster, st *s
 		for _, cand := range clusterCandidates {
 			poller, err := c.AgentPools.BeginDelete(ctx, rg, cand, tmmPoolName, nil)
 			if err != nil {
-				if !isAzureNotFound(err) {
+				if !isAzureNotFound(err) && !isClusterDeletionAlreadyInitiated(err) {
 					return fmt.Errorf("failed to delete TMM nodepool %s: %w", tmmPoolName, err)
 				}
 			} else if poller != nil {
-				if _, err := poller.PollUntilDone(ctx, nil); err != nil && !isAzureNotFound(err) {
+				if _, err := poller.PollUntilDone(ctx, nil); err != nil && !isAzureNotFound(err) && !isClusterDeletionAlreadyInitiated(err) {
 					return fmt.Errorf("polling TMM nodepool %s deletion: %w", tmmPoolName, err)
 				}
 			}
@@ -150,15 +195,27 @@ func PhaseDownCluster(ctx context.Context, c *Clients, cl *intent.Cluster, st *s
 
 	if c.ManagedClusters != nil && rg != "" {
 		for _, cand := range clusterCandidates {
-			poller, err := c.ManagedClusters.BeginDelete(ctx, rg, cand, nil)
-			if err != nil {
-				if !isAzureNotFound(err) {
-					return fmt.Errorf("failed to delete AKS cluster %s: %w", cand, err)
+			var lastErr error
+			for attempt := 0; attempt < 3; attempt++ {
+				lastErr = nil
+				poller, err := c.ManagedClusters.BeginDelete(ctx, rg, cand, nil)
+				if err != nil {
+					if isAzureNotFound(err) {
+						break
+					}
+					lastErr = fmt.Errorf("failed to delete AKS cluster %s: %w", cand, err)
+				} else if poller != nil {
+					if _, err := poller.PollUntilDone(ctx, nil); err != nil && !isAzureNotFound(err) {
+						lastErr = fmt.Errorf("polling AKS cluster %s deletion: %w", cand, err)
+					}
 				}
-			} else if poller != nil {
-				if _, err := poller.PollUntilDone(ctx, nil); err != nil && !isAzureNotFound(err) {
-					return fmt.Errorf("polling AKS cluster %s deletion: %w", cand, err)
+				if lastErr == nil || !isRetryableAKSDeleteError(lastErr) {
+					break
 				}
+				cancelBlockingVMSSRollingUpgrades(ctx, lastErr)
+			}
+			if lastErr != nil {
+				return lastErr
 			}
 		}
 	}
@@ -340,6 +397,7 @@ func PhaseDownNAT(ctx context.Context, c *Clients, cl *intent.Cluster, st *state
 			derivedNatPip,
 			fmt.Sprintf("%s-nat-pip", baseName),
 			fmt.Sprintf("pip-nat-%s", baseName),
+			fmt.Sprintf("pip-natgw-%s", baseName),
 			stateIngressPip,
 			fmt.Sprintf("pip-ingress-%s", baseName),
 			fmt.Sprintf("%s-vip-pip", baseName),
@@ -549,19 +607,36 @@ func StripStuckFinalizers(ctx context.Context, dyn dynamic.Interface, ns string)
 		{Group: "fic.f5.com", Version: "v1", Resource: "egressgateways"},
 		{Group: "fic.f5.com", Version: "v1", Resource: "l4routes"},
 		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "infras"},
+		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "l2networks"},
+		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "l3networks"},
+		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "backends"},
 		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "gatewaysettings"},
 		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "egressgateways"},
 		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "l4routes"},
 		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "l4globalpolicies"},
 		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "apppolicies"},
+		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "netpolicies"},
+		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "secpolicies"},
+		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "f5epps"},
 		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "infras"},
+		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "l2networks"},
+		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "l3networks"},
+		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "backends"},
 		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "gatewaysettings"},
 		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "egressgateways"},
 		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "l4routes"},
+		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "l4globalpolicies"},
+		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "apppolicies"},
+		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "netpolicies"},
+		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "secpolicies"},
+		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "f5epps"},
 		{Group: "gateway.k8s.f5net.com", Version: "v1", Resource: "l4routes"},
 		{Group: "gateway.k8s.f5net.com", Version: "v1", Resource: "gatewaysettings"},
 		{Group: "k8s.f5net.com", Version: "v1", Resource: "infras"},
 		{Group: "k8s.f5net.com", Version: "v1", Resource: "egressgateways"},
+		{Group: "k8s.f5net.com", Version: "v1", Resource: "f5-big-cne-irules"},
+		{Group: "k8s.f5net.com", Version: "v1", Resource: "f5-big-irules"},
+		{Group: "k8s.f5net.com", Version: "v1", Resource: "f5-big-fw-policies"},
 		{Group: "k8s.f5net.com", Version: "v1", Resource: "f5-big-dns-caches"},
 		{Group: "k8s.f5net.com", Version: "v1", Resource: "f5-big-persistence-profiles"},
 		{Group: "k8s.f5net.com", Version: "v1", Resource: "f5-spk-egress"},

@@ -42,7 +42,8 @@ func reconcileStaticRouteDrift(ctx context.Context, dyn dynamic.Interface, cl *i
 	}
 	extGW := strings.TrimSpace(st.Get("EXT_GW"))
 	intGW := strings.TrimSpace(st.Get("INT_GW"))
-	if extGW == "" && intGW == "" {
+	podGW := strings.TrimSpace(st.Get("TMM_POD_GW"))
+	if extGW == "" && intGW == "" && podGW == "" {
 		return nil
 	}
 
@@ -70,6 +71,18 @@ func reconcileStaticRouteDrift(ctx context.Context, dyn dynamic.Interface, cl *i
 		}
 	}
 
+	mainCIDR := strings.TrimSpace(st.Get("MAIN_CIDR"))
+	rawAgentIPs := strings.TrimSpace(st.Get("AGENT_EXT_IPS"))
+	if rawAgentIPs == "" {
+		rawAgentIPs = strings.TrimSpace(st.Get("AGENT_EXT_IP"))
+	}
+	var agentExtIPs []string
+	for _, p := range strings.Split(rawAgentIPs, ",") {
+		if ip := strings.TrimSpace(p); ip != "" {
+			agentExtIPs = append(agentExtIPs, ip)
+		}
+	}
+
 	// Reconcile BNK 2.4/2.5 Infra CR staticRoutes if present.
 	for _, gvr := range []schema.GroupVersionResource{infraV1Alpha1GVR, infraV1GVR} {
 		list, err := dyn.Resource(gvr).Namespace(bnkconst.InstanceNamespace).List(ctx, metav1.ListOptions{})
@@ -83,6 +96,9 @@ func reconcileStaticRouteDrift(ctx context.Context, dyn dynamic.Interface, cl *i
 				continue
 			}
 			changed := false
+			hasExtGWLink := false
+			hasMgmtNodes := false
+			existingAgentRoutes := map[string]bool{}
 			for j, raw := range routes {
 				rm, ok := raw.(map[string]any)
 				if !ok {
@@ -90,13 +106,92 @@ func reconcileStaticRouteDrift(ctx context.Context, dyn dynamic.Interface, cl *i
 				}
 				name, _ := rm["name"].(string)
 				gw, _ := rm["gateway"].(string)
-				if name == "default-egress" && extGW != "" && gw != extGW {
-					rm["gateway"] = extGW
-					routes[j] = rm
-					changed = true
-				} else if name == "internal-vpc" && intGW != "" && gw != intGW {
-					rm["gateway"] = intGW
-					routes[j] = rm
+				nh, _ := rm["nextHop"].(string)
+				switch {
+				case name == "route-ext-gw":
+					hasExtGWLink = true
+				case name == "mgmt-nodes" || name == "route-mgmt-nodes":
+					hasMgmtNodes = true
+					if podGW != "" && nh != podGW {
+						rm["nextHop"] = podGW
+						routes[j] = rm
+						changed = true
+					}
+				case name == "agent-node" || name == "route-agent-node" || strings.HasPrefix(name, "agent-node-"):
+					existingAgentRoutes[name] = true
+					if podGW != "" && nh != podGW {
+						rm["nextHop"] = podGW
+						routes[j] = rm
+						changed = true
+					}
+				case name == "default-egress" || name == "route-default-egress" || name == "default":
+					if extGW != "" {
+						if gw != "" && gw != extGW {
+							rm["gateway"] = extGW
+							routes[j] = rm
+							changed = true
+						}
+						if nh != "" && nh != extGW {
+							rm["nextHop"] = extGW
+							routes[j] = rm
+							changed = true
+						}
+					}
+				case name == "internal-vpc":
+					if intGW != "" {
+						if gw != "" && gw != intGW {
+							rm["gateway"] = intGW
+							routes[j] = rm
+							changed = true
+						}
+						if nh != "" && nh != intGW {
+							rm["nextHop"] = intGW
+							routes[j] = rm
+							changed = true
+						}
+					}
+				case name == "service-cidr" || name == "pod-cidr" || name == "route-cluster-pods" || name == "route-cluster-svcs":
+					if podGW != "" && nh != podGW {
+						rm["nextHop"] = podGW
+						routes[j] = rm
+						changed = true
+					}
+				}
+			}
+			if !hasExtGWLink && extGW != "" {
+				routes = append([]any{
+					map[string]any{
+						"name":         "route-ext-gw",
+						"destinations": []any{extGW + "/32"},
+						"networkRef": map[string]any{
+							"name": "external",
+						},
+					},
+				}, routes...)
+				changed = true
+			}
+			if !hasMgmtNodes && mainCIDR != "" && podGW != "" {
+				routes = append(routes, map[string]any{
+					"name":         "mgmt-nodes",
+					"destinations": []any{mainCIDR},
+					"nextHop":      podGW,
+				})
+				changed = true
+			}
+			if podGW != "" {
+				for idx, ip := range agentExtIPs {
+					routeName := "agent-node"
+					if idx > 0 {
+						routeName = fmt.Sprintf("agent-node-%d", idx+1)
+					}
+					if existingAgentRoutes[routeName] || (idx == 0 && existingAgentRoutes["route-agent-node"]) {
+						continue
+					}
+					routes = append(routes, map[string]any{
+						"name":         routeName,
+						"destinations": []any{ip + "/32"},
+						"nextHop":      podGW,
+					})
 					changed = true
 				}
 			}

@@ -66,10 +66,12 @@ func Phase29ForgeRegister(ctx context.Context, cl *intent.Cluster, st *state.Sta
 	projectType := cl.Forge.ProjectType
 	if projectType == "" {
 		projectType = "cloud-azure"
+		cl.Forge.ProjectType = projectType
 	}
 	cloudProvider := cl.Forge.CloudProvider
 	if cloudProvider == "" {
 		cloudProvider = "azure"
+		cl.Forge.CloudProvider = cloudProvider
 	}
 
 	req := forge.RegisterRequest{

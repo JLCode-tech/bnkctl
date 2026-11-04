@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/JLCode-tech/bnkctl/pkg/intent"
 	"github.com/JLCode-tech/bnkctl/pkg/k8s"
 	"github.com/JLCode-tech/bnkctl/pkg/state"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -70,6 +73,35 @@ func Phase24NodeLabels(ctx context.Context, cl *intent.Cluster, st *state.State,
 	}
 
 	if cfg != nil {
+		applier, err := k8s.NewApplier(cfg)
+		if err != nil {
+			return fmt.Errorf("phase24: creating applier: %w", err)
+		}
+
+		fmt.Fprintln(os.Stderr, "[phase 24] configuring CoreDNS endpoint_pod_names for BNK mTLS...")
+		restartCoreDNS := false
+		if customCM, gErr := cs.CoreV1().ConfigMaps("kube-system").Get(ctx, "coredns-custom", metav1.GetOptions{}); gErr == nil && customCM != nil {
+			if _, hasOverride := customCM.Data["bnk-endpoint-pod-names.override"]; hasOverride {
+				delete(customCM.Data, "bnk-endpoint-pod-names.override")
+				if _, uErr := cs.CoreV1().ConfigMaps("kube-system").Update(ctx, customCM, metav1.UpdateOptions{}); uErr == nil {
+					restartCoreDNS = true
+				}
+			}
+		}
+		if cm, gErr := cs.CoreV1().ConfigMaps("kube-system").Get(ctx, "coredns", metav1.GetOptions{}); gErr == nil && cm != nil {
+			if corefile, ok := cm.Data["Corefile"]; ok && !strings.Contains(corefile, "endpoint_pod_names") {
+				cm.Data["Corefile"] = strings.Replace(corefile, "pods insecure\n", "pods insecure\n            endpoint_pod_names\n", 1)
+				if _, uErr := cs.CoreV1().ConfigMaps("kube-system").Update(ctx, cm, metav1.UpdateOptions{}); uErr == nil {
+					restartCoreDNS = true
+				}
+			}
+		}
+		if restartCoreDNS {
+			_ = cs.CoreV1().Pods("kube-system").DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{
+				LabelSelector: "k8s-app=kube-dns",
+			})
+		}
+
 		fmt.Fprintln(os.Stderr, "[phase 24] configuring HugePages (2Mi) and kernel params on nodes...")
 		hugepagesDS := `apiVersion: apps/v1
 kind: DaemonSet
@@ -121,7 +153,37 @@ spec:
               nsenter -t 1 -m -u -i -n -p -- systemctl restart kubelet || true
             fi
           fi
-          sleep infinity
+
+          while true; do
+            nsenter -t 1 -m -u -i -n -p -- sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+            nsenter -t 1 -m -u -i -n -p -- sysctl -w net.bridge.bridge-nf-call-iptables=0 >/dev/null 2>&1 || true
+            for br in br-ext br-int; do
+              if nsenter -t 1 -n -- ip link show "$br" >/dev/null 2>&1; then
+                nsenter -t 1 -n -- ip link set "$br" up 2>/dev/null || true
+                nsenter -t 1 -m -u -i -n -p -- ethtool -K "$br" tx off rx off tso off gso off gro off 2>/dev/null || true
+                for p in $(nsenter -t 1 -m -u -i -n -p -- ls "/sys/class/net/${br}/brif" 2>/dev/null); do
+                  nsenter -t 1 -m -u -i -n -p -- ethtool -K "$p" tx off rx off tso off gso off gro off 2>/dev/null || true
+                done
+                nsenter -t 1 -n -- iptables -C FORWARD -i "$br" -j ACCEPT 2>/dev/null || nsenter -t 1 -n -- iptables -I FORWARD 1 -i "$br" -j ACCEPT 2>/dev/null || true
+                nsenter -t 1 -n -- iptables -C FORWARD -o "$br" -j ACCEPT 2>/dev/null || nsenter -t 1 -n -- iptables -I FORWARD 1 -o "$br" -j ACCEPT 2>/dev/null || true
+              fi
+            done
+            nsenter -t 1 -n -- iptables -t nat -C POSTROUTING -o br-ext ! -s 10.0.17.0/24 -j MASQUERADE 2>/dev/null || nsenter -t 1 -n -- iptables -t nat -A POSTROUTING -o br-ext ! -s 10.0.17.0/24 -j MASQUERADE 2>/dev/null || true
+            nsenter -t 1 -n -- iptables -t nat -C POSTROUTING -s 10.0.17.0/24 ! -d 10.0.17.0/24 -j MASQUERADE 2>/dev/null || nsenter -t 1 -n -- iptables -t nat -A POSTROUTING -s 10.0.17.0/24 ! -d 10.0.17.0/24 -j MASQUERADE 2>/dev/null || true
+            nsenter -t 1 -n -- iptables -t nat -C POSTROUTING -s 10.0.18.0/24 ! -d 10.0.18.0/24 -j MASQUERADE 2>/dev/null || nsenter -t 1 -n -- iptables -t nat -A POSTROUTING -s 10.0.18.0/24 ! -d 10.0.18.0/24 -j MASQUERADE 2>/dev/null || true
+
+            TMM_PID=$(nsenter -t 1 -m -u -i -n -p -- pgrep -f "/bin/tmm" 2>/dev/null | head -n 1 || true)
+            if [ -n "$TMM_PID" ]; then
+              for inf in net1 net2; do
+                if nsenter -t 1 -m -u -i -p -- nsenter -t "$TMM_PID" -n -- ip link show "$inf" >/dev/null 2>&1; then
+                  nsenter -t 1 -m -u -i -p -- nsenter -t "$TMM_PID" -n -- ip addr flush dev "$inf" 2>/dev/null || true
+                  nsenter -t 1 -m -u -i -p -- nsenter -t "$TMM_PID" -n -- ip link set "$inf" up promisc on 2>/dev/null || true
+                  nsenter -t 1 -m -u -i -p -- nsenter -t "$TMM_PID" -n -- ethtool -K "$inf" tx off rx off tso off gso off gro off 2>/dev/null || true
+                fi
+              done
+            fi
+            sleep 3
+          done
         resources:
           requests:
             cpu: 10m
@@ -130,16 +192,30 @@ spec:
             cpu: 50m
             memory: 64Mi
 `
-		applier, err := k8s.NewApplier(cfg)
-		if err != nil {
-			return fmt.Errorf("phase24: creating applier: %w", err)
-		}
 		dsObjs, err := k8s.ParseYAMLStream([]byte(hugepagesDS))
 		if err != nil {
 			return fmt.Errorf("phase24: parsing hugepages DaemonSet: %w", err)
 		}
 		if err := applier.ApplyAll(ctx, dsObjs, true); err != nil {
 			return fmt.Errorf("phase24: applying hugepages DaemonSet: %w", err)
+		}
+
+		// Wait up to 90s for TMM node to report allocatable hugepages-2Mi
+		hpDeadline := time.Now().Add(90 * time.Second)
+		for time.Now().Before(hpDeadline) {
+			tmmNodes, lErr := cs.CoreV1().Nodes().List(ctx, metav1.ListOptions{LabelSelector: "app=f5-tmm"})
+			if lErr == nil && len(tmmNodes.Items) > 0 {
+				q, ok := tmmNodes.Items[0].Status.Allocatable[corev1.ResourceName("hugepages-2Mi")]
+				if ok && !q.IsZero() {
+					fmt.Fprintf(os.Stderr, "[phase 24] verified allocatable hugepages-2Mi=%s on %s\n", q.String(), tmmNodes.Items[0].Name)
+					break
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Second):
+			}
 		}
 	}
 
