@@ -37,6 +37,7 @@ spec:
 
         set gov_key $gov_caller
         if { $gov_caller eq "anonymous" } { set gov_key "ip:$gov_client" }
+        if { $gov_session ne "" } { set gov_key "${gov_key}:${gov_session}" }
 
         set gov_mcp 0
         if { [HTTP::path] starts_with "/v1/mcp/forecast" } { set gov_mcp 1 }
@@ -144,9 +145,6 @@ spec:
   - group: k8s.f5net.com
     kind: F5BigCneIrule
     name: mcp-rate-limit-irule
-  - group: k8s.f5net.com
-    kind: F5BigPersistenceProfile
-    name: mcp-session
 ---
 apiVersion: gateway.k8s.f5.com/v1alpha1
 kind: NetPolicy
@@ -163,9 +161,6 @@ spec:
   - group: k8s.f5net.com
     kind: F5BigCneIrule
     name: mcp-rate-limit-irule
-  - group: k8s.f5net.com
-    kind: F5BigPersistenceProfile
-    name: mcp-session
 ---
 apiVersion: k8s.f5net.com/v1
 kind: F5BigFwPolicy

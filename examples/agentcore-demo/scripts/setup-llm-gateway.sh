@@ -204,6 +204,10 @@ if [ -n "${CNE_POD}" ]; then
     curl -sk -X PUT "${GOV_BASE}/principals/${prin_id}/ratelimit" -H "Authorization: Bearer ${BEARER_TOKEN}" -H "Content-Type: application/json" \
       -d '{"requestsPerMinute":60,"tokensPerMinute":120000}' >/dev/null || true
 
+    for old_vk_id in $(curl -sk "${TENANT_BASE}/virtual-keys" -H "Authorization: Bearer ${BEARER_TOKEN}" | python3 -c "import sys,json; d=json.load(sys.stdin); items=(d.get('items') or d.get('data') if isinstance(d,dict) else d) or []; print(' '.join(str(x.get('id')) for x in items if isinstance(x,dict) and x.get('id') and x.get('name')=='${vk_name}' and (not x.get('principalId') or x.get('principalId')=='${prin_id}')))" 2>/dev/null || true); do
+      curl -sk -X DELETE "${TENANT_BASE}/virtual-keys/${old_vk_id}" -H "Authorization: Bearer ${BEARER_TOKEN}" >/dev/null 2>&1 || true
+    done
+
     vk_json="$(curl -sk -X POST "${TENANT_BASE}/virtual-keys" -H "Authorization: Bearer ${BEARER_TOKEN}" -H "Content-Type: application/json" \
       -d "{\"principalId\":\"${prin_id}\",\"name\":\"${vk_name}\",\"allowedModels\":[\"claude-sonnet-4-5\",\"gpt-4o-mini\"]}")"
     vk_key="$(printf '%s' "${vk_json}" | python3 -c 'import sys,json; d=json.load(sys.stdin); u=d.get("data") if isinstance(d.get("data"),dict) else d; print(u.get("token") or u.get("key") or u.get("cleartext_key") or u.get("api_key") or "")' 2>/dev/null || true)"

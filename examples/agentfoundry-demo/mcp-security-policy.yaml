@@ -25,6 +25,10 @@ spec:
         set static::mcp_privileged_token "demo-agent-token-a7f3c1"
         set static::mcp_external_token "demo-external-token-4b9e2d"
     }
+    when CLIENT_DATA priority 1 {
+        TCP::release
+        event CLIENT_DATA disable
+    }
     when HTTP_REQUEST {
         set gov_t0 [clock clicks -milliseconds]
         set gov_bearer ""
@@ -153,13 +157,13 @@ spec:
     kind: Gateway
     name: bnk-agentfoundry-demo-gateway
     sectionName: http
+  # Note: F5BigPersistenceProfile/mcp-session (MODEL_CONTEXT_PROTOCOL) is NOT
+  # attached here because its auto-generated iRule throws TCL error
+  # "Prerequisite operation not in progress" on BNK 2.4.1 and aborts the connection.
   extensionRefs:
   - group: k8s.f5net.com
     kind: F5BigCneIrule
     name: mcp-rate-limit-irule
-  - group: k8s.f5net.com
-    kind: F5BigPersistenceProfile
-    name: mcp-session
 ---
 apiVersion: gateway.k8s.f5.com/v1alpha1
 kind: NetPolicy
@@ -176,9 +180,6 @@ spec:
   - group: k8s.f5net.com
     kind: F5BigCneIrule
     name: mcp-rate-limit-irule
-  - group: k8s.f5net.com
-    kind: F5BigPersistenceProfile
-    name: mcp-session
 ---
 # L4 firewall attached to the Gateway, rendered in Forge under the Gateway.
 # Scoped so "default deny plus explicit allow" is demonstrable: only in-VNet

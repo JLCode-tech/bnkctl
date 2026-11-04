@@ -250,9 +250,14 @@ data:
             except Exception:
                 pass
 
-        # Record BNK 2.4.1 AI Gateway telemetry in ClickHouse otel.aigw_requests
+        # Record BNK 2.4.1 AI Gateway telemetry in ClickHouse otel.aigw_requests and Loki token shipper
         row = build_aigw_row(int(time.time() * 1000), prof, model, ptk, ctk, cached, lat, 200, failover)
         ch_st, _ = ch_query("INSERT INTO otel.aigw_requests FORMAT JSONEachRow", (json.dumps(row) + "\n").encode("utf-8"))
+        post_json(
+            "http://foundry-token-shipper.llm-egress.svc.cluster.local:9090",
+            {"model": model, "status": 200, "prompt_tk": ptk, "comp_tk": ctk, "principal": prof["principal_id"], "org": prof["org_id"], "client": prof["principal_id"]},
+            timeout=2
+        )
 
         # Leg B1: Trusted MCP forecast (200 OK)
         fc_body = {
@@ -316,20 +321,24 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: foundry-traffic-generator
+  name: agentfoundry-traffic-generator
   namespace: default
   labels:
-    app: foundry-traffic-generator
+    app: agentfoundry-traffic-generator
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: foundry-traffic-generator
+      app: agentfoundry-traffic-generator
   template:
     metadata:
       labels:
-        app: foundry-traffic-generator
+        app: agentfoundry-traffic-generator
     spec:
+      nodeSelector:
+        app: f5-tmm
+      tolerations:
+      - operator: Exists
       containers:
       - name: traffic-gen
         image: python:3.11-slim

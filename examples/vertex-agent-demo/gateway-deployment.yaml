@@ -33,7 +33,7 @@ spec:
   - hardwareAcceleration: none
     name: default-egress
     networkRef:
-      name: int-vlan-infra
+      name: external
     sourceNATConfig:
       type: Automap
   ingressConfig:
@@ -41,7 +41,7 @@ spec:
       ipamRefs:
       - name: listener-pool
       networkRefs:
-      - name: ext-vlan-infra
+      - name: external
       sourceNATConfig:
         type: Automap
 ---
@@ -97,6 +97,7 @@ spec:
   to:
   - group: ""
     kind: Service
+    name: vertex-finance-mcp
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -105,7 +106,10 @@ metadata:
   namespace: default
 spec:
   parentRefs:
-  - name: bnk-vertex-demo-gateway
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: bnk-vertex-demo-gateway
+    namespace: default
   rules:
   - matches:
     - path:
@@ -118,14 +122,21 @@ spec:
           type: ReplacePrefixMatch
           replacePrefixMatch: /
     backendRefs:
-    - name: vertex-finance-mcp
+    - group: ""
+      kind: Service
+      name: vertex-finance-mcp
       namespace: bnk-demo
       port: 8080
+      weight: 1
   - matches:
     - path:
         type: PathPrefix
         value: /.well-known/agent-card.json
     backendRefs:
-    - name: vertex-finance-mcp
+    - group: ""
+      kind: Service
+      name: vertex-finance-mcp
       namespace: bnk-demo
       port: 8080
+      weight: 1
+

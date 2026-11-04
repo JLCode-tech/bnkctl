@@ -18,7 +18,17 @@ data:
 
     SYMBOLS = ["GOOGL", "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA"]
     PROMPTS = ["Optimize container vessel berth scheduling across Port Botany and Port of Melbourne", "Classify HS tariff codes and biosecurity declarations for trans-Tasman cargo manifest", "Compute 5-minute NEM FCAS contingency battery dispatch bid stack for SA/VIC interconnector", "Forecast utility-scale solar curtailment and negative spot price intervals in QLD"]
-    PROFILES = json.loads('''[{"vk_id": "vk-833f3d578707d505f9ff8adfb132371d", "vk_name": "vessel-scheduler-prod-vk", "token": "f5vk_FCfoa4MimK5m7bDjMRDS69ZoYMR6Dls2vpWH02OcYrYRp9loVGC32oUcHkhbX6ydYS4hJoJUbAgW9RXZQN6U72zb69c", "principal_id": "vessel-scheduler-agent", "team_id": "t-d666d84ba6d2c0ba", "team_name": "maritime-fleet-routing", "org_id": "oceania-autonomous-logistics", "models": ["gemini-2-5-pro", "gpt-4o-mini"]}, {"vk_id": "vk-f8d3161f41e3f6f39c67dd272b9e46df", "vk_name": "customs-tariff-prod-vk", "token": "f5vk_FCfoa4MimK5m7bDjMRDS9eoH4ZdXrLPTMAwyTXDTkIKJbsoXd19YyzjMMe8qZJryCevrn2sZEmQHGOrwfwUbW2ZtD1i", "principal_id": "customs-tariff-classifier", "team_id": "t-d666d84ba6d2c0ba", "team_name": "maritime-fleet-routing", "org_id": "oceania-autonomous-logistics", "models": ["gpt-4o-mini", "gemini-2-5-pro"]}, {"vk_id": "vk-926f1288f60c6f006a0c2bfb27510dfc", "vk_name": "grid-bidding-prod-vk", "token": "f5vk_FCfoa4MimK5m7bDjMRDS6bdSgyqndcBwGZYS1nP59eVfw9QndZxUzH25e1CiypMUJitJG8fV3XzqRjP9M9wXn1RvuDN", "principal_id": "grid-bidding-agent", "team_id": "t-f5931f712f651425", "team_name": "grid-bidding-dispatch", "org_id": "nem-smart-grid-australia", "models": ["gemini-2-5-pro", "gpt-4o-mini"]}, {"vk_id": "vk-513c9342fb1d31e02e96d79ee54dda1a", "vk_name": "chen-vertex-ops-vk", "token": "f5vk_FCfoa4MimK5m7bDjMRDS4fB8qCl8pJaJrJV4dy8l9mzapB5BFkkhPZ41VVIKDbijpwADJH15rIdIyexGKR5T034r8lB", "principal_id": "liam-chen-grid-director", "team_id": "t-f5931f712f651425", "team_name": "grid-bidding-dispatch", "org_id": "nem-smart-grid-australia", "models": ["gemini-2-5-pro", "gpt-4o-mini"]}]''')
+    PROFILES = json.loads(os.environ.get("PROFILES_JSON") or '''[{"vk_id": "vk-833f3d578707d505f9ff8adfb132371d", "vk_name": "vessel-scheduler-prod-vk", "token": "f5vk_FCfoa4MimK5m7bDjMRDS69ZoYMR6Dls2vpWH02OcYrYRp9loVGC32oUcHkhbX6ydYS4hJoJUbAgW9RXZQN6U72zb69c", "principal_id": "vessel-scheduler-agent", "team_id": "t-d666d84ba6d2c0ba", "team_name": "maritime-fleet-routing", "org_id": "oceania-autonomous-logistics", "models": ["gemini-2-5-pro", "gpt-4o-mini"]}, {"vk_id": "vk-f8d3161f41e3f6f39c67dd272b9e46df", "vk_name": "customs-tariff-prod-vk", "token": "f5vk_FCfoa4MimK5m7bDjMRDS9eoH4ZdXrLPTMAwyTXDTkIKJbsoXd19YyzjMMe8qZJryCevrn2sZEmQHGOrwfwUbW2ZtD1i", "principal_id": "customs-tariff-classifier", "team_id": "t-d666d84ba6d2c0ba", "team_name": "maritime-fleet-routing", "org_id": "oceania-autonomous-logistics", "models": ["gpt-4o-mini", "gemini-2-5-pro"]}, {"vk_id": "vk-926f1288f60c6f006a0c2bfb27510dfc", "vk_name": "grid-bidding-prod-vk", "token": "f5vk_FCfoa4MimK5m7bDjMRDS6bdSgyqndcBwGZYS1nP59eVfw9QndZxUzH25e1CiypMUJitJG8fV3XzqRjP9M9wXn1RvuDN", "principal_id": "grid-bidding-agent", "team_id": "t-f5931f712f651425", "team_name": "grid-bidding-dispatch", "org_id": "nem-smart-grid-australia", "models": ["gemini-2-5-pro", "gpt-4o-mini"]}, {"vk_id": "vk-513c9342fb1d31e02e96d79ee54dda1a", "vk_name": "chen-vertex-ops-vk", "token": "f5vk_FCfoa4MimK5m7bDjMRDS4fB8qCl8pJaJrJV4dy8l9mzapB5BFkkhPZ41VVIKDbijpwADJH15rIdIyexGKR5T034r8lB", "principal_id": "liam-chen-grid-director", "team_id": "t-f5931f712f651425", "team_name": "grid-bidding-dispatch", "org_id": "nem-smart-grid-australia", "models": ["gemini-2-5-pro", "gpt-4o-mini"]}]''')
+    _vk_env_map = {
+        "vessel-scheduler-agent": "VK_VESSEL_SCHEDULER",
+        "customs-tariff-classifier": "VK_CUSTOMS_TARIFF",
+        "grid-bidding-agent": "VK_GRID_BIDDING",
+        "liam-chen-grid-director": "VK_LIAM_CHEN",
+    }
+    for _p in PROFILES:
+        _env_k = _vk_env_map.get(_p.get("principal_id", ""), "")
+        if _env_k and os.environ.get(_env_k):
+            _p["token"] = os.environ[_env_k]
     SERVED_MODELS = json.loads('''{"gemini-2-5-pro": "gemini-2.5-pro-preview-05-06", "gpt-4o-mini": "gpt-4o-mini-2024-07-18"}''')
     PRICING_MICROS = json.loads('''{"gemini-2-5-pro": [1250000, 10000000], "gpt-4o-mini": [150000, 600000]}''')
 
@@ -125,6 +135,7 @@ data:
             "vk_id": prof["vk_id"],
             "principal_id": prof["principal_id"],
             "team_id": prof["team_id"],
+            "team_name": prof["team_name"],
             "org_id": prof["org_id"],
             "model": model,
             "provider": prov,
@@ -259,14 +270,14 @@ data:
         f_res = post_json(
             MCP_URL,
             fc_body,
-            {"Authorization": "Bearer " + AGENT_TOKEN, "Host": INGRESS_HOST, "Mcp-Session-Id": f"sess-{prof['principal_id']}"},
+            {"Authorization": "Bearer " + AGENT_TOKEN, "Host": INGRESS_HOST, "Mcp-Session-Id": f"sess-{prof['principal_id']}-{cycle}"},
             timeout=2
         )
         if f_res == 0:
             f_res = post_json(
                 MCP_SVC_FALLBACK + "/v1/mcp/forecast",
                 fc_body,
-                {"Authorization": "Bearer " + AGENT_TOKEN, "Host": INGRESS_HOST, "Mcp-Session-Id": f"sess-{prof['principal_id']}"},
+                {"Authorization": "Bearer " + AGENT_TOKEN, "Host": INGRESS_HOST, "Mcp-Session-Id": f"sess-{prof['principal_id']}-{cycle}"},
                 timeout=4
             )
 
@@ -280,14 +291,14 @@ data:
         b_res = post_json(
             MCP_URL,
             bal_body,
-            {"Authorization": "Bearer " + EXTERNAL_TOKEN, "Host": INGRESS_HOST},
+            {"Authorization": "Bearer " + EXTERNAL_TOKEN, "Host": INGRESS_HOST, "Mcp-Session-Id": f"sess-bal-{cycle}"},
             timeout=2
         )
         if b_res == 0:
             b_res = post_json(
                 MCP_SVC_FALLBACK + "/v1/mcp/forecast",
                 bal_body,
-                {"Authorization": "Bearer " + EXTERNAL_TOKEN, "Host": INGRESS_HOST},
+                {"Authorization": "Bearer " + EXTERNAL_TOKEN, "Host": INGRESS_HOST, "Mcp-Session-Id": f"sess-bal-{cycle}"},
                 timeout=4
             )
 
@@ -295,9 +306,9 @@ data:
         d_res = get(DISC_URL, headers={"Host": INGRESS_HOST}, timeout=2)
         if d_res == 0:
             d_res = get(MCP_SVC_FALLBACK + "/.well-known/agent-card.json", headers={"Host": INGRESS_HOST}, timeout=4)
-        u_res = post_json(MCP_URL, fc_body, headers={"Host": INGRESS_HOST}, timeout=2)
+        u_res = post_json(MCP_URL, fc_body, headers={"Host": INGRESS_HOST, "Mcp-Session-Id": f"sess-unauth-{cycle}"}, timeout=2)
         if u_res == 0:
-            u_res = post_json(MCP_SVC_FALLBACK + "/v1/mcp/forecast", fc_body, headers={"Host": INGRESS_HOST}, timeout=4)
+            u_res = post_json(MCP_SVC_FALLBACK + "/v1/mcp/forecast", fc_body, headers={"Host": INGRESS_HOST, "Mcp-Session-Id": f"sess-unauth-{cycle}"}, timeout=4)
 
         ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         print(
@@ -325,6 +336,8 @@ spec:
       labels:
         app: vertex-traffic-generator
     spec:
+      nodeSelector:
+        cloud.google.com/gke-nodepool: agent-pool
       containers:
       - name: traffic-gen
         image: python:3.11-slim
