@@ -132,6 +132,10 @@ func TestRenderAllMatrix(t *testing.T) {
 							t.Errorf("expected Infra staticRoutes entry %q in rendered BNK %s manifests", routeEntry, ver)
 						}
 					}
+					expectedSubnet := "subnet: " + strings.TrimSpace(strings.Split(u.PodCIDR, ",")[0])
+					if !strings.Contains(string(rendered.NetworkCRsYAML), expectedSubnet) {
+						t.Errorf("expected Infra egressDefaults %q in rendered BNK %s manifests", expectedSubnet, ver)
+					}
 					if strings.HasPrefix(ver, "2.4.1") || strings.HasPrefix(ver, "2.5") {
 						if !strings.Contains(all, "kind: F5BigDnsCache") || !strings.Contains(all, "name: aigw-dns-resolver") {
 							t.Errorf("expected F5BigDnsCache/aigw-dns-resolver in rendered BNK %s manifests", ver)
@@ -495,6 +499,19 @@ func TestRenderAIGateway241AndHeal(t *testing.T) {
 	}
 	if ct, _, _ := unstructured.NestedString(dnsObj.Object, "spec", "cacheType"); ct != "net-resolver" {
 		t.Fatalf("expected cacheType=net-resolver, got %q", ct)
+	}
+	fzs, _, _ := unstructured.NestedSlice(dnsObj.Object, "spec", "netResolver", "forwardZones")
+	if len(fzs) == 0 {
+		t.Fatalf("expected forwardZones in healed aigw-dns-resolver, got %+v", dnsObj.Object)
+	}
+	fz0, _ := fzs[0].(map[string]any)
+	nss, _ := fz0["nameServers"].([]any)
+	if len(nss) == 0 {
+		t.Fatalf("expected nameServers in healed aigw-dns-resolver, got %+v", fz0)
+	}
+	ns0, _ := nss[0].(map[string]any)
+	if gotIP, _ := ns0["ipAddress"].(string); gotIP != bnkconst.DefaultAWSClusterDNSIP {
+		t.Fatalf("expected healed AWS aigw-dns-resolver first DNS IP %q, got %q", bnkconst.DefaultAWSClusterDNSIP, gotIP)
 	}
 }
 

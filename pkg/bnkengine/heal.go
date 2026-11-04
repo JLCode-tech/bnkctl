@@ -709,7 +709,7 @@ func healAIGWDNSResolver(ctx context.Context, k8sClient kubernetes.Interface, dy
 		}
 	}
 
-	dnsHost := bnkconst.DefaultK8sClusterDNSIP
+	dnsHost := ""
 	kubeDNSAbsent := true
 	if k8sClient != nil {
 		if svc, sErr := k8sClient.CoreV1().Services("kube-system").Get(ctx, "kube-dns", metav1.GetOptions{}); sErr == nil && svc != nil {
@@ -747,6 +747,22 @@ func healAIGWDNSResolver(ctx context.Context, k8sClient kubernetes.Interface, dy
 		if _, cErr := dynClient.Resource(healDNSCacheGVR).Namespace(targetNS).Create(ctx, dnsCR, metav1.CreateOptions{FieldManager: "bnkctl-heal"}); cErr != nil && !apierrors.IsAlreadyExists(cErr) {
 			f.Error = cErr.Error()
 			return f
+		}
+	}
+	if dnsHost == "" {
+		if fzs, ok, _ := unstructured.NestedSlice(dnsCR.Object, "spec", "netResolver", "forwardZones"); ok && len(fzs) > 0 {
+			if fz, ok := fzs[0].(map[string]any); ok {
+				if nss, ok := fz["nameServers"].([]any); ok && len(nss) > 0 {
+					if ns0, ok := nss[0].(map[string]any); ok {
+						if ip, ok := ns0["ipAddress"].(string); ok && ip != "" {
+							dnsHost = ip
+						}
+					}
+				}
+			}
+		}
+		if dnsHost == "" {
+			dnsHost = bnkconst.DefaultK8sClusterDNSIP
 		}
 	}
 	f.Healed = true

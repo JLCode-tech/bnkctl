@@ -12,6 +12,7 @@ import (
 	"github.com/JLCode-tech/bnkctl/pkg/bnkconst"
 	"github.com/JLCode-tech/bnkctl/pkg/intent"
 	"github.com/JLCode-tech/bnkctl/pkg/k8s/manifests"
+	"github.com/JLCode-tech/bnkctl/pkg/provider"
 )
 
 // CertChainVars holds the substitution variables for shared/bnk-cert-chain.yaml.
@@ -213,8 +214,8 @@ func RenderNADs(tmpl []byte, namespace string, hasInternal bool, getter func(str
 		Namespace:       namespace,
 		ExternalNADName: "external-netdevice",
 		InternalNADName: "internal-netdevice",
-		ExternalPCI:     orDefault(getter, "EXTERNAL_PCI", "0000:00:08.0"),
-		InternalPCI:     orDefault(getter, "INTERNAL_PCI", "0000:00:07.0"),
+		ExternalPCI:     orDefault(getter, "EXTERNAL_PCI", provider.DefaultAWSExtPCIBDF),
+		InternalPCI:     orDefault(getter, "INTERNAL_PCI", provider.DefaultAWSIntPCIBDF),
 		HasInternal:     hasInternal,
 	}
 	return Render(tmpl, vars)
@@ -371,8 +372,8 @@ func RenderCNEInstance(tmpl []byte, cl *intent.Cluster, getter func(string) stri
 		InternalIFName:      intIFName,
 		ExternalIFUpper:     strings.ToUpper(extIFName),
 		InternalIFUpper:     strings.ToUpper(intIFName),
-		ExternalPCI:         orDefault(getter, "EXTERNAL_PCI", "0000:00:08.0"),
-		InternalPCI:         orDefault(getter, "INTERNAL_PCI", "0000:00:07.0"),
+		ExternalPCI:         orDefault(getter, "EXTERNAL_PCI", provider.DefaultAWSExtPCIBDF),
+		InternalPCI:         orDefault(getter, "INTERNAL_PCI", provider.DefaultAWSIntPCIBDF),
 		CloudHostDeviceName: orDefault(getter, "CLOUD_HOST_DEVICE_NAME", extIFName),
 		CloudHostDeviceTag:  "f5-cne-device",
 		HasInternal:         cl.HasInternalInterface(),
@@ -443,8 +444,8 @@ const (
 	InfraListenerPool        = "listener-pool"
 	infraListenerFirst       = 100
 	infraListenerLast        = 199
-	InfraEgressSubnet        = "192.168.0.0/16"
-	InfraEgressPort          = 4789
+	InfraEgressSubnet        = provider.DefaultAWSPodCIDR
+	InfraEgressPort          = bnkconst.DefaultVXLANPort
 	InfraRouteVPC            = "vpc"
 	InfraRouteVNet           = "vnet"
 	InfraRouteDefault        = "default"
@@ -526,7 +527,7 @@ func RenderInfra(tmpl []byte, cl *intent.Cluster, hasInternal bool) ([]byte, err
 	if cl.DataplaneBinding() == "sriov" {
 		externalNAD = "external-sriov"
 	}
-	mtu := 1500
+	mtu := bnkconst.DefaultMTU
 	if cl.Bnk != nil && cl.Bnk.TmmMtu.Int() > 0 {
 		mtu = cl.Bnk.TmmMtu.Int()
 	}
@@ -565,7 +566,7 @@ func RenderInfra(tmpl []byte, cl *intent.Cluster, hasInternal bool) ([]byte, err
 		EgressSubnet:    InfraEgressSubnet,
 		EgressPort:      InfraEgressPort,
 		VpcCidr:         cl.Network.VPCCidr,
-		ServiceCIDR:     "172.20.0.0/16",
+		ServiceCIDR:     provider.DefaultAWSServiceCIDR,
 		PodSubnetA:      podSubnetA,
 		PodSubnetB:      podSubnetB,
 		TunnelGateway:   tunnelGW,
@@ -738,7 +739,7 @@ func RenderAzureVlansRoutes(data VlansRoutesData) ([]byte, error) {
 // RenderAzureInfra renders the Azure BNK 2.4 Infra custom resource.
 func RenderAzureInfra(data InfraData) ([]byte, error) {
 	if data.TmmMtu == 0 {
-		data.TmmMtu = 1500
+		data.TmmMtu = bnkconst.DefaultMTU
 	}
 	if data.ServiceCidrDest == "" {
 		data.ServiceCidrDest = "10.240.0.0"

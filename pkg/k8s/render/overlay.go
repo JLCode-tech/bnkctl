@@ -212,8 +212,14 @@ func RenderUnifiedCNEInstance(cl *intent.Cluster, u *provider.UnderlayContext, p
 			tmmEnvMap["TMM_CALICO_ROUTER"] = "default"
 			tmmEnvMap[TMMK8sRoutesEnv] = strings.Join(k8sRoutes, ",")
 		}
-		extPCI := "0000:00:05.0"
-		intPCI := "0000:00:06.0"
+		extPCI := traits.DefaultExtPCIBDF
+		if extPCI == "" {
+			extPCI = provider.DefaultGCPExtPCIBDF
+		}
+		intPCI := traits.DefaultIntPCIBDF
+		if intPCI == "" {
+			intPCI = provider.DefaultGCPIntPCIBDF
+		}
 		if len(u.DataplaneNodes) > 0 {
 			for idx, nic := range u.DataplaneNodes[0].NICs {
 				if (nic.NICIndex == 1 || (nic.NICIndex == 0 && idx == 0)) && nic.PCIAddress != "" {
@@ -233,9 +239,17 @@ func RenderUnifiedCNEInstance(cl *intent.Cluster, u *provider.UnderlayContext, p
 		tmmEnvMap["TMM_MAPRES_ADDL_VETHS_ON_DP"] = "TRUE"
 		tmmEnvMap["TMM_SOCAT_DISABLE"] = "1"
 		extIf := provider.DefaultAWSLinuxExtNIC
-		extPCI := "0000:00:08.0"
+		defaultExtPCI := traits.DefaultExtPCIBDF
+		if defaultExtPCI == "" {
+			defaultExtPCI = provider.DefaultAWSExtPCIBDF
+		}
+		extPCI := defaultExtPCI
 		intIf := provider.DefaultAWSLinuxIntNIC
-		intPCI := "0000:00:07.0"
+		defaultIntPCI := traits.DefaultIntPCIBDF
+		if defaultIntPCI == "" {
+			defaultIntPCI = provider.DefaultAWSIntPCIBDF
+		}
+		intPCI := defaultIntPCI
 		extNetName := provider.NetNameExternal
 		if ext := u.ExternalNetwork(); ext != nil && ext.Name != "" {
 			extNetName = ext.Name
@@ -266,7 +280,7 @@ func RenderUnifiedCNEInstance(cl *intent.Cluster, u *provider.UnderlayContext, p
 				}
 			}
 		}
-		if extPCI == "0000:00:08.0" {
+		if extPCI == defaultExtPCI {
 			if ext := u.ExternalNetwork(); ext != nil && len(ext.NodeNICMap) > 0 {
 				for _, pci := range ext.NodeNICMap {
 					if pci != "" {
@@ -276,7 +290,7 @@ func RenderUnifiedCNEInstance(cl *intent.Cluster, u *provider.UnderlayContext, p
 				}
 			}
 		}
-		if intPCI == "0000:00:07.0" {
+		if intPCI == defaultIntPCI {
 			if intl := u.InternalNetwork(); intl != nil && len(intl.NodeNICMap) > 0 {
 				for _, pci := range intl.NodeNICMap {
 					if pci != "" {
@@ -480,7 +494,7 @@ func RenderUnifiedCNEInstance(cl *intent.Cluster, u *provider.UnderlayContext, p
 // and f5-utils so CWC reconciles regardless of which namespace it watches.
 func RenderUnifiedLicenseCR(cl *intent.Cluster, jwtToken string, teemCertURL string) ([]byte, error) {
 	if teemCertURL == "" {
-		teemCertURL = "https://product.apis.f5.com/ee/v1/keys/public/telemetry.pub"
+		teemCertURL = bnkconst.DefaultTEEMCertURL
 	}
 	var docs []string
 	for _, ns := range []string{bnkconst.InstanceNamespace, bnkconst.CoreNamespace, bnkconst.UtilsNamespace} {
@@ -665,7 +679,7 @@ func RenderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 	}
 
 	az := ""
-	if cl != nil && cl.Bnk != nil && strings.EqualFold(cl.Bnk.ControllerEnv["PLATFORM_TYPE"], "AWS") {
+	if cl != nil && cl.Bnk != nil && provider.ShouldIncludeIPAMAvailabilityZone(cl.Bnk.ControllerEnv) {
 		if cl.Metadata.Zone != "" {
 			az = cl.Metadata.Zone
 		} else if len(cl.Network.AZs) > 0 {
@@ -871,6 +885,21 @@ func RenderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 		egressNet = intNetName
 	}
 
+	egressSubnet := ""
+	for _, part := range strings.Split(u.PodCIDR, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			egressSubnet = trimmed
+			break
+		}
+	}
+	if egressSubnet == "" {
+		if traits.DefaultPodCIDR != "" {
+			egressSubnet = traits.DefaultPodCIDR
+		} else {
+			egressSubnet = provider.DefaultAWSPodCIDR
+		}
+	}
+
 	infraSpec := map[string]any{
 		"ipams":              ipams,
 		"networkAttachments": netAttachments,
@@ -879,8 +908,8 @@ func RenderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 			"networkRef": map[string]any{
 				"name": egressNet,
 			},
-			"port":   4789,
-			"subnet": provider.DefaultAWSPodCIDR,
+			"port":   bnkconst.DefaultVXLANPort,
+			"subnet": egressSubnet,
 		},
 	}
 	if len(staticRoutes) > 0 {
@@ -1141,6 +1170,11 @@ func BuildAIGWDNSResolverObject(cl *intent.Cluster, u *provider.UnderlayContext,
 		netResolver["useIpv4"] = true
 		netResolver["useIpv6"] = false
 		var traits provider.DataplaneTraits
+		if u == nil && cl != nil {
+			if derived, err := provider.BuildUnderlayFromIntent(cl); err == nil && derived != nil {
+				u = derived
+			}
+		}
 		if u != nil {
 			traits = u.EnsureTraits()
 		} else {
@@ -1156,8 +1190,8 @@ func BuildAIGWDNSResolverObject(cl *intent.Cluster, u *provider.UnderlayContext,
 				}
 			}
 			if dnsIP == "" {
-				if u != nil && strings.EqualFold(u.CloudName, intent.ProviderAWS) {
-					dnsIP = bnkconst.DefaultAWSClusterDNSIP
+				if traits.DefaultClusterDNSIP != "" {
+					dnsIP = traits.DefaultClusterDNSIP
 				} else {
 					dnsIP = bnkconst.DefaultK8sClusterDNSIP
 				}

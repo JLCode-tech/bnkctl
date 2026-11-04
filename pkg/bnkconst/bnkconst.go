@@ -76,17 +76,20 @@ const (
 	// Default cert-manager version
 	DefaultCertManagerVersion = "v1.21.1"
 
-	// Network, MTU, BGP, and DNS defaults
+	// Network, MTU, BGP, VXLAN, TEEM, and DNS defaults
 	DefaultMTU                   = 1500
 	DefaultGCPMTU                = 1460
 	DefaultRouteDomain0MTU       = 1390
 	DefaultBGPASN                = 64512
+	DefaultVXLANPort             = 4789
+	DefaultTEEMCertURL           = "https://product.apis.f5.com/ee/v1/keys/public/telemetry.pub"
 	CalicoVXLANLinkLocalGW       = "169.254.1.1"
 	TMMBlobdLinkLocalEndpoint    = "169.254.0.253 9222"
 	DefaultDNSForwarderPrimary   = "8.8.8.8"
 	DefaultDNSForwarderSecondary = "1.1.1.1"
 	DefaultDNSPort               = 53
 	DefaultAWSClusterDNSIP       = "172.20.0.10"
+	DefaultAzureClusterDNSIP     = "10.240.0.10"
 	DefaultK8sClusterDNSIP       = "10.96.0.10"
 
 	// Lifecycle timeouts & polling intervals
