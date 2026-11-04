@@ -659,6 +659,42 @@ func TestSubnetPrefixSuffixAndCustomMasksInBuildUnderlay(t *testing.T) {
 	if got := gcpU.InternalNetwork().SelfIPs[0]; !strings.HasSuffix(got, "/28") {
 		t.Errorf("GCP internal SelfIP = %q, want /28 suffix", got)
 	}
+
+	// Verify RenderUnifiedNetworkAndEgress does not mistake a /28 subnet mask on SelfIPs
+	// for a delegated /28 sub-prefix at .0 (which would overlap .0 network and .1 gateway),
+	// while still honoring genuine delegated /28 sub-prefixes (e.g. 10.90.4.48/28 inside 10.90.4.0/22).
+	ctx := context.Background()
+	prof, err := release.Resolve(ctx, "2.4.1", "", nil)
+	if err != nil {
+		t.Fatalf("release.Resolve: %v", err)
+	}
+	azrNetYAML, _, err := render.RenderUnifiedNetworkAndEgress(azrCl, azrU, prof)
+	if err != nil {
+		t.Fatalf("RenderUnifiedNetworkAndEgress(azure /28 internal): %v", err)
+	}
+	if strings.Contains(string(azrNetYAML), "rangeStart: 10.90.32.0") {
+		t.Errorf("expected /28 internal subnet not to use .0 network address as rangeStart, got:\n%s", string(azrNetYAML))
+	}
+	if !strings.Contains(string(azrNetYAML), "rangeStart: 10.90.32.11") || !strings.Contains(string(azrNetYAML), "rangeEnd: 10.90.32.12") {
+		t.Errorf("expected /28 internal subnet to preserve 10.90.32.11..10.90.32.12 range, got:\n%s", string(azrNetYAML))
+	}
+
+	// Delegated /28 sub-block inside a /22 external subnet -> splits .48..50 for SelfIPs and .51..62 for listener-pool
+	gcpU.Networks[0].SelfIPs = []string{"10.90.4.48/28"}
+	gcpNetYAML, _, err := render.RenderUnifiedNetworkAndEgress(gcpCl, gcpU, prof)
+	if err != nil {
+		t.Fatalf("RenderUnifiedNetworkAndEgress(gcp delegated /28): %v", err)
+	}
+	for _, want := range []string{
+		"rangeStart: 10.90.4.48",
+		"rangeEnd: 10.90.4.50",
+		"rangeStart: 10.90.4.51",
+		"rangeEnd: 10.90.4.62",
+	} {
+		if !strings.Contains(string(gcpNetYAML), want) {
+			t.Errorf("expected delegated /28 Infra YAML to contain %q, got:\n%s", want, string(gcpNetYAML))
+		}
+	}
 }
 
 // TestPCIBDFConstantsAndCNEInstanceRendering verifies that RenderUnifiedCNEInstance
