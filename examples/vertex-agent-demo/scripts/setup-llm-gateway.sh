@@ -9,6 +9,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEMO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${DEMO_DIR}/../.." && pwd)"
 
+if [ -f "${REPO_ROOT}/examples/common/bnk-aigw-lib.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${REPO_ROOT}/examples/common/bnk-aigw-lib.sh"
+fi
+
 CLUSTER="${1:-${CLUSTER:-bnk-vertex-demo}}"
 BNK_NS="${BNK_NS:-f5-cne-system}"
 CORE_NS="${CORE_NS:-f5-cne-core}"

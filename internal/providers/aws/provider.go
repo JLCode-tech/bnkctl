@@ -420,9 +420,9 @@ func (p *Provider) attachHooks(u *provider.UnderlayContext, cl *intent.Cluster, 
 		if err != nil {
 			return nil
 		}
-		extIfName := "ens8"
+		extIfName := provider.DefaultAWSLinuxExtNIC
 		extPCI := ""
-		intIfName := "ens7"
+		intIfName := provider.DefaultAWSLinuxIntNIC
 		intPCI := ""
 		if st != nil {
 			if v := st.Get("EXTERNAL_IFNAME"); v != "" {
@@ -496,21 +496,21 @@ func (p *Provider) attachHooks(u *provider.UnderlayContext, cl *intent.Cluster, 
 			names = append(names, node.Name)
 			nics := []provider.NICAttachment{
 				{
-					NetworkName:  "external-nad",
+					NetworkName:  provider.NetNameExternal,
 					NICIndex:     1,
 					LinuxIfName:  extIfName,
 					PCIAddress:   extPCI,
-					TMMInterface: "1.1",
+					TMMInterface: provider.TMMInterfaceDPDKExt,
 					Driver:       provider.DriverDPDKPCI,
 				},
 			}
 			if u.InternalNetwork() != nil {
 				nics = append(nics, provider.NICAttachment{
-					NetworkName:  "internal-nad",
+					NetworkName:  provider.NetNameInternal,
 					NICIndex:     2,
 					LinuxIfName:  intIfName,
 					PCIAddress:   intPCI,
-					TMMInterface: "1.2",
+					TMMInterface: provider.TMMInterfaceDPDKInt,
 					Driver:       provider.DriverDPDKPCI,
 				})
 			}
@@ -535,7 +535,7 @@ func (p *Provider) attachHooks(u *provider.UnderlayContext, cl *intent.Cluster, 
 		if dryRun || k8sClient == nil {
 			return nil
 		}
-		if cm, err := k8sClient.CoreV1().ConfigMaps(bnkconst.InstanceNamespace).Get(ctx, "tmm-init", metav1.GetOptions{}); err == nil && cm != nil {
+		if cm, err := k8sClient.CoreV1().ConfigMaps(bnkconst.InstanceNamespace).Get(ctx, bnkconst.ConfigMapTMMInit, metav1.GetOptions{}); err == nil && cm != nil {
 			if cm.Data == nil {
 				cm.Data = make(map[string]string)
 			}
@@ -599,12 +599,12 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 	extPCI := st.Get("EXTERNAL_PCI")
 	extIf := st.Get("EXTERNAL_IFNAME")
 	if extIf == "" {
-		extIf = "ens8"
+		extIf = provider.DefaultAWSLinuxExtNIC
 	}
 	intPCI := st.Get("INTERNAL_PCI")
 	intIf := st.Get("INTERNAL_IFNAME")
 	if intIf == "" {
-		intIf = "ens7"
+		intIf = provider.DefaultAWSLinuxIntNIC
 	}
 	nodeName := st.Get("TMM_NODE_NAME")
 	if nodeName == "" {
@@ -612,8 +612,8 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 	}
 	if extPCI != "" && len(u.Networks) > 0 {
 		extCNI, _ := json.Marshal(map[string]any{
-			"cniVersion": "0.3.1",
-			"name":       "external-net",
+			"cniVersion": provider.CNIVersionDefault,
+			"name":       provider.NetNameExternal,
 			"type":       "host-device",
 			"pciBusID":   extPCI,
 		})
@@ -622,8 +622,8 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 	}
 	if intPCI != "" && len(u.Networks) > 1 {
 		intCNI, _ := json.Marshal(map[string]any{
-			"cniVersion": "0.3.1",
-			"name":       "internal-net",
+			"cniVersion": provider.CNIVersionDefault,
+			"name":       provider.NetNameInternal,
 			"type":       "host-device",
 			"pciBusID":   intPCI,
 		})
@@ -633,21 +633,21 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 	if extPCI != "" || intPCI != "" {
 		nics := []provider.NICAttachment{
 			{
-				NetworkName:  "external-net",
+				NetworkName:  provider.NetNameExternal,
 				NICIndex:     1,
 				PCIAddress:   extPCI,
 				LinuxIfName:  extIf,
-				TMMInterface: "1.1",
+				TMMInterface: provider.TMMInterfaceDPDKExt,
 				Driver:       provider.DriverDPDKPCI,
 			},
 		}
 		if intPCI != "" || len(u.Networks) > 1 {
 			nics = append(nics, provider.NICAttachment{
-				NetworkName:  "internal-net",
+				NetworkName:  provider.NetNameInternal,
 				NICIndex:     2,
 				PCIAddress:   intPCI,
 				LinuxIfName:  intIf,
-				TMMInterface: "1.2",
+				TMMInterface: provider.TMMInterfaceDPDKInt,
 				Driver:       provider.DriverDPDKPCI,
 			})
 		}

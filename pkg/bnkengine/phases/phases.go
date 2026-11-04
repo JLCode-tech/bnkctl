@@ -27,6 +27,7 @@ import (
 	"github.com/JLCode-tech/bnkctl/pkg/bnkconst"
 	"github.com/JLCode-tech/bnkctl/pkg/k8s"
 	"github.com/JLCode-tech/bnkctl/pkg/provider"
+	"github.com/JLCode-tech/bnkctl/pkg/release"
 	"gopkg.in/yaml.v3"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -43,27 +44,17 @@ import (
 type ApplyYAMLFunc func(ctx context.Context, raw []byte) error
 
 // RequiredNamespaces lists all standard BNK namespaces created during PhaseNamespaces.
-var RequiredNamespaces = []string{
-	bnkconst.NamespaceCneCore,
-	bnkconst.NamespaceCneSystem,
-	"f5-bnk-instance",
-	bnkconst.NamespaceUtils,
-	bnkconst.NamespaceMaintenance,
-	bnkconst.NamespaceApp,
-	bnkconst.NamespaceCertManager,
-	"aigateway",
-	"bnk-demo",
-}
+var RequiredNamespaces = bnkconst.DefaultNamespaces
 
 // FARSecretNamespaces lists the namespaces into which far-secret is distributed.
 var FARSecretNamespaces = []string{
 	bnkconst.NamespaceCneCore,
 	bnkconst.NamespaceCneSystem,
-	"f5-bnk-instance",
+	bnkconst.NamespaceF5BNKInstance,
 	bnkconst.NamespaceUtils,
 	bnkconst.NamespaceMaintenance,
 	bnkconst.NamespaceApp,
-	"aigateway",
+	bnkconst.NamespaceAIGateway,
 }
 
 // PhaseNamespaces ensures all required BNK namespaces and the test namespace exist.
@@ -376,7 +367,7 @@ func PhaseFLO(ctx context.Context, kubeconfigPath, farKeyJSON, floChartVersion s
 		floChartVersion,
 		"v" + strings.TrimPrefix(floChartVersion, "v"),
 		strings.TrimPrefix(floChartVersion, "v"),
-		"v2.30.0-0.11.4",
+		release.DefaultFLOChartVersion(),
 	}
 	ch, err := installer.PullAndLoad(k8s.FLOChartRef, candidates[0])
 	if err != nil {
@@ -474,7 +465,7 @@ func SyncCPCLKeySecret(ctx context.Context, k8sClient kubernetes.Interface, jwks
 		// #nosec G402 -- internal cluster CWC endpoint uses self-signed cert
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
-	client := &http.Client{Transport: tr, Timeout: 10 * time.Second}
+	client := &http.Client{Transport: tr, Timeout: bnkconst.DefaultJWKSHTTPTimeout}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksEndpoint, nil)
 	if err != nil {
 		return err
@@ -537,7 +528,7 @@ func PhaseLicense(ctx context.Context, k8sClient kubernetes.Interface, applyFn A
 		return fmt.Errorf("apply License: %w", err)
 	}
 	if k8sClient != nil {
-		if cm, err := k8sClient.CoreV1().ConfigMaps(bnkconst.NamespaceCneCore).Get(ctx, "cpcl-key-cm", metav1.GetOptions{}); err == nil && cm != nil {
+		if cm, err := k8sClient.CoreV1().ConfigMaps(bnkconst.NamespaceCneCore).Get(ctx, bnkconst.ConfigMapCPCLKey, metav1.GetOptions{}); err == nil && cm != nil {
 			if jwtKey := cm.Data["jwt.key"]; jwtKey != "" {
 				for _, ns := range []string{bnkconst.UtilsNamespace, bnkconst.NamespaceCneCore, bnkconst.InstanceNamespace} {
 					sec := &corev1.Secret{
@@ -681,7 +672,7 @@ func CheckCNEInstanceActivation(ctx context.Context, k8sClient kubernetes.Interf
 	return st, nil
 }
 
-const tmmTerminatingStuckThreshold = 45 * time.Second
+const tmmTerminatingStuckThreshold = bnkconst.DefaultTMMTerminatingStuckThreshold
 
 // CycleStuckTMMPods ensures DaemonSet/f5-tmm uses RollingUpdate (MaxSurge=0, MaxUnavailable=1)
 // and force-deletes (grace=0) any app=f5-tmm pod stuck in Terminating for >= 45s so single-node

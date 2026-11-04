@@ -471,7 +471,7 @@ func healTMMK8sRoutes(ctx context.Context, k8sClient kubernetes.Interface, dynCl
 			podCIDR = opts.Underlay.PodCIDR
 			routes = append(routes, opts.Underlay.PodCIDR)
 		}
-		if opts.Underlay.DataplaneDriver == provider.DriverVirtio && opts.Underlay.NodeCIDR != "" {
+		if opts.Underlay.EnsureTraits().IncludeNodeCIDRInK8sRoutes && opts.Underlay.NodeCIDR != "" {
 			routes = append(routes, opts.Underlay.NodeCIDR)
 		}
 	}
@@ -484,7 +484,7 @@ func healTMMK8sRoutes(ctx context.Context, k8sClient kubernetes.Interface, dynCl
 				podCIDR = u.PodCIDR
 				routes = append(routes, u.PodCIDR)
 			}
-			if u.DataplaneDriver == provider.DriverVirtio && u.NodeCIDR != "" {
+			if u.EnsureTraits().IncludeNodeCIDRInK8sRoutes && u.NodeCIDR != "" {
 				routes = append(routes, u.NodeCIDR)
 			}
 		}
@@ -699,17 +699,17 @@ func healAIGWDNSResolver(ctx context.Context, k8sClient kubernetes.Interface, dy
 		targetNS = bnkconst.InstanceNamespace
 	}
 
-	existing, err := safeDynamicGet(ctx, dynClient, healDNSCacheGVR, targetNS, "aigw-dns-resolver")
+	existing, err := safeDynamicGet(ctx, dynClient, healDNSCacheGVR, targetNS, bnkconst.CRAIGWDNSResolverName)
 	if err == nil && existing != nil {
 		ct, _, _ := unstructured.NestedString(existing.Object, "spec", "cacheType")
 		if ct == "net-resolver" {
 			f.Healthy = true
-			f.Description = fmt.Sprintf("aigw-dns-resolver F5BigDnsCache (net-resolver) present in %s", targetNS)
+			f.Description = fmt.Sprintf("%s F5BigDnsCache (net-resolver) present in %s", bnkconst.CRAIGWDNSResolverName, targetNS)
 			return f
 		}
 	}
 
-	dnsHost := "10.96.0.10"
+	dnsHost := bnkconst.DefaultK8sClusterDNSIP
 	kubeDNSAbsent := true
 	if k8sClient != nil {
 		if svc, sErr := k8sClient.CoreV1().Services("kube-system").Get(ctx, "kube-dns", metav1.GetOptions{}); sErr == nil && svc != nil {
@@ -728,36 +728,13 @@ func healAIGWDNSResolver(ctx context.Context, k8sClient kubernetes.Interface, dy
 	if kubeDNSAbsent {
 		reason = "kube-system/kube-dns Service absent (CoreDNS cluster)"
 	}
-	f.Description = fmt.Sprintf("aigw-dns-resolver F5BigDnsCache missing or misconfigured in %s (%s)", targetNS, reason)
+	f.Description = fmt.Sprintf("%s F5BigDnsCache missing or misconfigured in %s (%s)", bnkconst.CRAIGWDNSResolverName, targetNS, reason)
 	if opts.DryRun {
 		return f
 	}
 
 	dnsCR := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "k8s.f5net.com/v1",
-			"kind":       "F5BigDnsCache",
-			"metadata": map[string]any{
-				"name":      "aigw-dns-resolver",
-				"namespace": targetNS,
-			},
-			"spec": map[string]any{
-				"cacheType": "net-resolver",
-				"netResolver": map[string]any{
-					"forwardZones": []any{
-						map[string]any{
-							"forwardZone": ".",
-							"nameServers": []any{
-								map[string]any{
-									"ipAddress": dnsHost,
-									"port":      int64(53),
-								},
-							},
-						},
-					},
-				},
-			},
-		},
+		Object: render.BuildAIGWDNSResolverObject(opts.Cluster, opts.Underlay, targetNS, dnsHost),
 	}
 
 	if existing != nil {
@@ -774,7 +751,7 @@ func healAIGWDNSResolver(ctx context.Context, k8sClient kubernetes.Interface, dy
 	}
 	f.Healed = true
 	f.Healthy = true
-	f.Description = fmt.Sprintf("reconciled aigw-dns-resolver F5BigDnsCache (net-resolver) in %s forwarding to %s:53", targetNS, dnsHost)
+	f.Description = fmt.Sprintf("reconciled %s F5BigDnsCache (net-resolver) in %s forwarding to %s:%d", bnkconst.CRAIGWDNSResolverName, targetNS, dnsHost, bnkconst.DefaultDNSPort)
 	return f
 }
 
