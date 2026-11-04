@@ -1097,18 +1097,26 @@ func SelfIPPoolRange(selfIP string) (start, end string, err error) {
 	return start, end, nil
 }
 
-// DeriveSelfIP returns the host-offset IP and prefix length for a /24 CIDR.
+// DeriveSelfIP returns the host-offset IP and prefix length for an IPv4 subnet CIDR.
 func DeriveSelfIP(cidr string, hostOffset int) (string, int) {
 	_, ipnet, err := net.ParseCIDR(cidr)
-	if err != nil {
+	if err != nil || ipnet == nil {
 		return "", 0
 	}
-	prefix, _ := ipnet.Mask.Size()
-	base := ipnet.IP.To4()
-	if base == nil || prefix != 24 || hostOffset < 1 || hostOffset > 254 {
+	prefix, bits := ipnet.Mask.Size()
+	base := ipnet.IP.Mask(ipnet.Mask).To4()
+	if base == nil || bits != 32 || prefix < 8 || prefix > 28 || hostOffset < 1 {
 		return "", prefix
 	}
-	return net.IPv4(base[0], base[1], base[2], byte(hostOffset)).String(), prefix
+	maxHost := (1 << (32 - prefix)) - 2
+	if hostOffset > maxHost {
+		return "", prefix
+	}
+	ip, err := netcalc.Nth(ipnet.String(), hostOffset)
+	if err != nil {
+		return "", prefix
+	}
+	return ip, prefix
 }
 
 // DemoEnabled reports whether demo mode is active on this cluster.
@@ -1485,18 +1493,24 @@ func (c *Cluster) applyAWSDefaults() {
 		}
 		sip := c.Network.DataPath.SelfIPs
 		if sip.External == "" {
-			if ip, p := DeriveSelfIP(c.Network.DataPath.External.CIDR, DefaultTMMSelfIPHostOffset); ip != "" {
-				sip.External = ip
-				if sip.PrefixLen == 0 {
-					sip.PrefixLen = p
+			for _, offset := range []int{DefaultTMMSelfIPHostOffset, 50, 11} {
+				if ip, p := DeriveSelfIP(c.Network.DataPath.External.CIDR, offset); ip != "" {
+					sip.External = ip
+					if sip.PrefixLen == 0 {
+						sip.PrefixLen = p
+					}
+					break
 				}
 			}
 		}
 		if c.HasInternalInterface() && sip.Internal == "" {
-			if ip, p := DeriveSelfIP(c.Network.DataPath.Internal.CIDR, DefaultTMMSelfIPHostOffset); ip != "" {
-				sip.Internal = ip
-				if sip.PrefixLen == 0 {
-					sip.PrefixLen = p
+			for _, offset := range []int{DefaultTMMSelfIPHostOffset, 50, 11} {
+				if ip, p := DeriveSelfIP(c.Network.DataPath.Internal.CIDR, offset); ip != "" {
+					sip.Internal = ip
+					if sip.PrefixLen == 0 {
+						sip.PrefixLen = p
+					}
+					break
 				}
 			}
 		}
@@ -2154,13 +2168,13 @@ func validateAWSBnk(b *BnkSpec) error {
 	return nil
 }
 
-func requireSlash24(cidr, field string) error {
+func requireValidDataPathCIDR(cidr, field string) error {
 	_, ipnet, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return fmt.Errorf("%s %q is not a valid CIDR: %w", field, cidr, err)
 	}
-	if ones, bits := ipnet.Mask.Size(); bits != 32 || ones != 24 {
-		return fmt.Errorf("%s %q: currently only /24 dataPath subnets are supported (got /%d)", field, cidr, ones)
+	if ones, bits := ipnet.Mask.Size(); bits != 32 || ones < 16 || ones > 28 {
+		return fmt.Errorf("%s %q: dataPath subnet prefix must be between /16 and /28 (got /%d)", field, cidr, ones)
 	}
 	return nil
 }
@@ -2179,7 +2193,7 @@ func validateAWSPattern(c *Cluster) error {
 	if dp.External.CIDR == "" || dp.External.AZ == "" {
 		return fmt.Errorf("pattern %s requires network.dataPath.external.{cidr,az}", c.Pattern)
 	}
-	if err := requireSlash24(dp.External.CIDR, "network.dataPath.external.cidr"); err != nil {
+	if err := requireValidDataPathCIDR(dp.External.CIDR, "network.dataPath.external.cidr"); err != nil {
 		return err
 	}
 	azSet := make(map[string]bool, len(c.Network.AZs))
@@ -2193,7 +2207,7 @@ func validateAWSPattern(c *Cluster) error {
 		if dp.Internal.CIDR == "" || dp.Internal.AZ == "" {
 			return fmt.Errorf("pattern dual-interface requires network.dataPath.internal.{cidr,az}")
 		}
-		if err := requireSlash24(dp.Internal.CIDR, "network.dataPath.internal.cidr"); err != nil {
+		if err := requireValidDataPathCIDR(dp.Internal.CIDR, "network.dataPath.internal.cidr"); err != nil {
 			return err
 		}
 		if !azSet[dp.Internal.AZ] {

@@ -239,4 +239,18 @@ bnk:
 			t.Fatalf("expected Load GCP cluster with kubernetesVersion 1.31 (< %s) to fail", MinKubernetesVersion)
 		}
 	})
+
+	t.Run("DeriveSelfIP supports non-/24 subnet prefixes", func(t *testing.T) {
+		ip22, pfx22 := DeriveSelfIP("10.90.4.0/22", DefaultTMMSelfIPHostOffset)
+		if ip22 != "10.90.4.240" || pfx22 != 22 {
+			t.Fatalf("DeriveSelfIP(/22, 240) = (%q, %d), want (10.90.4.240, 22)", ip22, pfx22)
+		}
+		ip26, pfx26 := DeriveSelfIP("10.90.8.0/26", 50)
+		if ip26 != "10.90.8.50" || pfx26 != 26 {
+			t.Fatalf("DeriveSelfIP(/26, 50) = (%q, %d), want (10.90.8.50, 26)", ip26, pfx26)
+		}
+		if ipOut, _ := DeriveSelfIP("10.90.8.0/26", 240); ipOut != "" {
+			t.Fatalf("DeriveSelfIP(/26, 240) = %q, want empty string for out-of-range offset", ipOut)
+		}
+	})
 }
