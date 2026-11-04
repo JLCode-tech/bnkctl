@@ -42,12 +42,12 @@ import (
 
 const (
 	// TEEMCertURL is the F5 telemetry public key endpoint required by License CR validation.
-	TEEMCertURL = "https://product.apis.f5.com/ee/v1/keys/public/telemetry.pub"
+	TEEMCertURL = bnkconst.DefaultTEEMCertURL
 	// CWCRestNamespace is the namespace where f5-spk-cwc runs.
 	CWCRestNamespace = bnkconst.InstanceNamespace
 	// CPCLKeySecretName is the secret name synced from CWC JWKS for TMM license validation.
 	// #nosec G101 -- Kubernetes Secret resource name, not a credential
-	CPCLKeySecretName = "cpcl-key-secret"
+	CPCLKeySecretName = bnkconst.CPCLKeySecretName
 )
 
 // Options configures BNK overlay engine operations.

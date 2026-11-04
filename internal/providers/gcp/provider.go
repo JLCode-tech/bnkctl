@@ -420,23 +420,7 @@ func (p *Provider) attachHooks(u *provider.UnderlayContext, cl *intent.Cluster, 
 		if dryRun || k8sClient == nil {
 			return nil
 		}
-		pods, err := k8sClient.CoreV1().Pods(bnkconst.InstanceNamespace).List(ctx, metav1.ListOptions{
-			LabelSelector: "app=f5-tmm",
-		})
-		if err != nil {
-			return nil
-		}
-		for i := range pods.Items {
-			pod := &pods.Items[i]
-			if pod.Labels == nil {
-				pod.Labels = make(map[string]string)
-			}
-			if pod.Labels["f5-traffic"] == "true" {
-				continue
-			}
-			pod.Labels["f5-traffic"] = "true"
-			_, _ = k8sClient.CoreV1().Pods(bnkconst.InstanceNamespace).Update(ctx, pod, metav1.UpdateOptions{})
-		}
+		provider.LabelTMMPodsForTraffic(ctx, k8sClient, bnkconst.InstanceNamespace)
 		if dynClient != nil {
 			_ = reconcileStaticRouteDrift(ctx, dynClient, cl, st)
 		}
@@ -448,37 +432,9 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 	if st == nil {
 		return
 	}
-	kcPath := st.Get("KUBECONFIG")
-	if kcPath == "" {
-		kcPath = st.Get("KUBECONFIG_PATH")
-		if kcPath != "" {
-			st.Set("KUBECONFIG", kcPath)
-		}
-	}
-	if kcPath != "" {
-		if _, err := os.Stat(kcPath); err != nil {
-			if candidate := st.KubeconfigPath(); candidate != "" {
-				kcPath = candidate
-			}
-		}
-	} else if st.KubeconfigPath() != "" {
-		if _, err := os.Stat(st.KubeconfigPath()); err == nil {
-			kcPath = st.KubeconfigPath()
-			st.Set("KUBECONFIG", kcPath)
-		}
-	}
-	if kcPath != "" {
-		u.KubeconfigPath = kcPath
-		// #nosec G304 -- kubeconfig path comes from workspace state.env
-		if raw, err := os.ReadFile(kcPath); err == nil {
-			u.Kubeconfig = raw
-		}
-	}
-	if svcCIDR := st.Get("SERVICE_CIDR"); svcCIDR != "" {
-		u.ServiceCIDR = svcCIDR
-	}
-	if podCIDR := st.Get("POD_CIDR"); podCIDR != "" {
-		u.PodCIDR = podCIDR
+	provider.HydrateUnderlayFromState(u, st)
+	if u.KubeconfigPath != "" && st.Get("KUBECONFIG") == "" {
+		st.Set("KUBECONFIG", u.KubeconfigPath)
 	}
 
 	extSelfIP := strings.TrimSpace(st.Get("TMM_EXT_SELFIP"))
@@ -493,7 +449,7 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 		selfCIDR := extSelfIP
 		cniAddr := extSelfIP
 		if !strings.Contains(extSelfIP, "/") {
-			selfCIDR = extSelfIP + subnetPrefixSuffix(u.Networks[0].SubnetCIDR, "/24")
+			selfCIDR = extSelfIP + provider.SubnetPrefixSuffix(u.Networks[0].SubnetCIDR, "/24")
 			cniAddr = extSelfIP + "/28"
 		}
 		u.Networks[0].SelfIPs = []string{selfCIDR}
@@ -524,7 +480,7 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 		selfCIDR := intSelfIP
 		cniAddr := intSelfIP
 		if !strings.Contains(intSelfIP, "/") {
-			selfCIDR = intSelfIP + subnetPrefixSuffix(u.Networks[1].SubnetCIDR, "/24")
+			selfCIDR = intSelfIP + provider.SubnetPrefixSuffix(u.Networks[1].SubnetCIDR, "/24")
 			cniAddr = intSelfIP + "/28"
 		}
 		u.Networks[1].SelfIPs = []string{selfCIDR}
@@ -651,11 +607,4 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 			}
 		}
 	}
-}
-
-func subnetPrefixSuffix(subnetCIDR, fallback string) string {
-	if idx := strings.Index(subnetCIDR, "/"); idx >= 0 {
-		return subnetCIDR[idx:]
-	}
-	return fallback
 }
