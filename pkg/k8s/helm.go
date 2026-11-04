@@ -60,6 +60,27 @@ func (r *realHelmInstaller) List(namespace, filter string) ([]*release.Release, 
 	return l.Run()
 }
 
+func normalizeFLOValues(values map[string]interface{}) map[string]interface{} {
+	if values == nil {
+		return nil
+	}
+	cp, ok := values["containerPlatform"].(string)
+	if !ok {
+		return values
+	}
+	switch cp {
+	case "Generic", "OCP", "Robin", "AON", "AWS", "IBM":
+		return values
+	default:
+		cloned := make(map[string]interface{}, len(values))
+		for k, v := range values {
+			cloned[k] = v
+		}
+		cloned["containerPlatform"] = "Generic"
+		return cloned
+	}
+}
+
 func (r *realHelmInstaller) Install(releaseName, namespace string, ch *chart.Chart, values map[string]interface{}) (*release.Release, error) {
 	inst := action.NewInstall(r.actionConfig)
 	inst.ReleaseName = releaseName
@@ -67,7 +88,7 @@ func (r *realHelmInstaller) Install(releaseName, namespace string, ch *chart.Cha
 	inst.Wait = true
 	inst.Timeout = floHelmInstallTimeout
 	inst.CreateNamespace = false
-	return inst.Run(ch, values)
+	return inst.Run(ch, normalizeFLOValues(values))
 }
 
 func (r *realHelmInstaller) Upgrade(releaseName, namespace string, ch *chart.Chart, values map[string]interface{}) (*release.Release, error) {
@@ -75,7 +96,7 @@ func (r *realHelmInstaller) Upgrade(releaseName, namespace string, ch *chart.Cha
 	upg.Namespace = namespace
 	upg.Wait = true
 	upg.Timeout = floHelmInstallTimeout
-	rel, err := upg.Run(releaseName, ch, values)
+	rel, err := upg.Run(releaseName, ch, normalizeFLOValues(values))
 	if err != nil {
 		return nil, err
 	}

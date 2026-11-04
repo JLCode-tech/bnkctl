@@ -148,8 +148,21 @@ func RenderUnifiedCNEInstance(cl *intent.Cluster, underlay *provider.UnderlayCon
 		{"name": "DEFAULT_ROUTE_INTERFACE_MTU", "value": fmt.Sprintf("%d", mtu)},
 		{"name": "TMM_SOCAT_DISABLE", "value": "1"},
 	}
+	var k8sRoutes []string
 	if underlay.ServiceCIDR != "" {
-		tmmEnv = append(tmmEnv, map[string]any{"name": TMMK8sRoutesEnv, "value": underlay.ServiceCIDR})
+		k8sRoutes = append(k8sRoutes, underlay.ServiceCIDR)
+	}
+	if underlay.PodCIDR != "" {
+		k8sRoutes = append(k8sRoutes, underlay.PodCIDR)
+	}
+	if underlay.DataplaneDriver == provider.DriverVirtio && underlay.NodeCIDR != "" {
+		k8sRoutes = append(k8sRoutes, underlay.NodeCIDR)
+	}
+	if len(k8sRoutes) > 0 {
+		tmmEnv = append(tmmEnv,
+			map[string]any{"name": "TMM_CALICO_ROUTER", "value": "default"},
+			map[string]any{"name": TMMK8sRoutesEnv, "value": strings.Join(k8sRoutes, ",")},
+		)
 	}
 
 	var nadNames []string

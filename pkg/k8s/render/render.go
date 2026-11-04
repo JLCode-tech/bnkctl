@@ -802,6 +802,10 @@ type GKECNEInstanceVars struct {
 	ExtPCI          string
 	IntPCI          string
 	ImageRegistry   string
+	ServiceCIDR     string
+	PodCIDR         string
+	MainCIDR        string
+	Telemetry       bool
 	AIGateway       bool
 }
 
@@ -809,6 +813,19 @@ func RenderGKECNEInstance(tmpl []byte, v GKECNEInstanceVars) ([]byte, error) {
 	if isAIGatewayManifestVersion(v.ManifestVersion) {
 		v.AIGateway = true
 	}
+	if v.ServiceCIDR == "" {
+		v.ServiceCIDR = "10.67.0.0/20"
+	}
+	if v.PodCIDR == "" && !strings.Contains(v.ServiceCIDR, ",") {
+		v.PodCIDR = "10.66.0.0/16"
+	}
+	var routes []string
+	for _, cidr := range []string{v.ServiceCIDR, v.PodCIDR, v.MainCIDR} {
+		if trimmed := strings.TrimSpace(cidr); trimmed != "" {
+			routes = append(routes, trimmed)
+		}
+	}
+	v.ServiceCIDR = strings.Join(routes, ",")
 	return Render(tmpl, v)
 }
 
@@ -866,6 +883,8 @@ type AgentRouteSetterVars struct {
 	ExtPodsCidr   string
 	ExtGwIP       string
 	AgentExtIface string
+	MainPodsCidr  string
+	MainSvcsCidr  string
 }
 
 func RenderAgentRouteSetter(tmpl []byte, v AgentRouteSetterVars) ([]byte, error) {

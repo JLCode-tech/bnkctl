@@ -20,6 +20,12 @@ spec:
       env:
       - name: TMM_DEFAULT_MTU
         value: "{{ .TmmMtu }}"
+{{- if .AIGateway }}
+      - name: USE_GATEWAY_SETTINGS
+        value: "true"
+      - name: MAX_ACTIVE_TMM_REPLICAS
+        value: "32"
+{{- end }}
     demoMode:
       enabled: true
     # envDiscovery must NOT be disabled. It is the step that injects the TMM
@@ -54,6 +60,14 @@ spec:
         value: "{{ .ExtPCI }}"
       - name: PCIDEVICE_INTEL_COM_INT
         value: "{{ .IntPCI }}"
+{{- if .AIGateway }}
+      - name: TMM_CALICO_ROUTER
+        value: "default"
+      - name: TMM_K8S_ROUTES
+        value: "{{ .ServiceCIDR }}"
+      - name: TMM_ENFORCE_SINGLE_NUMA_NODE
+        value: "false"
+{{- end }}
   certificate:
     clusterIssuer: ext-ca-cluster-issuer
   # coreCollection left at its default (empty), NOT `enabled: false`. On the
@@ -67,6 +81,10 @@ spec:
     enabled: false
   dynamicRouting:
     enabled: false
+{{- if .AIGateway }}
+  eppNamespaces:
+  - All
+{{- end }}
   firewallACL:
     enabled: false
   manifestVersion: "{{ .ManifestVersion }}"
@@ -83,14 +101,15 @@ spec:
     imagePullSecrets:
     - name: far-secret
     uri: {{ if .ImageRegistry }}{{ .ImageRegistry }}{{ else }}us-west1-docker.pkg.dev/f5-gcs-7056-ptg-cne-prod/spk-repo-non-ga{{ end }}
+  telemetry:
+    loggingSubsystem:
+      enabled: {{ if or .Telemetry .AIGateway }}true{{ else }}false{{ end }}
+    metricSubsystem:
+      enabled: {{ if .Telemetry }}true{{ else }}false{{ end }}
 {{- if .AIGateway }}
   aiGateway:
     enabled: true
     aiMetrics: true
+    consoleURL: "http://f5-ai-console-webui.aigateway:8080/v1/services/default"
 {{- end }}
-  telemetry:
-    loggingSubsystem:
-      enabled: {{ if .AIGateway }}true{{ else }}false{{ end }}
-    metricSubsystem:
-      enabled: false
   wholeCluster: true

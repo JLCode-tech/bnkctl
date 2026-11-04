@@ -51,7 +51,7 @@ spec:
 {{- end }}
   egressDefaults:
     networkRef:
-      name: {{ if .IntSelfIP }}internal{{ else }}external{{ end }}
+      name: external
     port: 4789
     subnet: 192.168.0.0/16
   staticRoutes:
@@ -66,4 +66,15 @@ spec:
   - name: route-default-egress
     destinations:
     - "0.0.0.0/0"
-    nextHop: {{ if .IntGwIP }}{{ .IntGwIP }}{{ else }}{{ .ExtGwIP }}{{ end }}
+    nextHop: {{ .ExtGwIP }}
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5BigDnsCache
+metadata:
+  name: aigw-dns-resolver
+  namespace: f5-cne-system
+spec:
+  forwardZones:
+    ".":
+      nameservers:
+      - "10.240.0.10:53"

@@ -988,4 +988,19 @@ func TestRenderUnifiedCNEInstance_DynamicNICNamesAndPCIs(t *testing.T) {
 	if strings.Contains(rendered, "ENS8") || strings.Contains(rendered, "ENS7") {
 		t.Errorf("RenderUnifiedCNEInstance still contains hardcoded ENS8/ENS7 when dynamic NICs provided:\n%s", rendered)
 	}
+
+	gkeUnderlay := &provider.UnderlayContext{
+		CloudName:       intent.ProviderGCP,
+		DataplaneDriver: provider.DriverVirtio,
+		ServiceCIDR:     "10.67.0.0/20",
+		PodCIDR:         "10.66.0.0/16",
+		NodeCIDR:        "10.60.0.0/20",
+	}
+	gkeOut, err := RenderUnifiedCNEInstance(cl, gkeUnderlay, profile)
+	if err != nil {
+		t.Fatalf("RenderUnifiedCNEInstance GKE DriverVirtio: %v", err)
+	}
+	if !strings.Contains(string(gkeOut), "10.67.0.0/20,10.66.0.0/16,10.60.0.0/20") {
+		t.Errorf("expected TMM_K8S_ROUTES with ServiceCIDR,PodCIDR,NodeCIDR for DriverVirtio, got:\n%s", gkeOut)
+	}
 }

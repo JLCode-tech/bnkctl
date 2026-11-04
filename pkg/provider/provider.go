@@ -233,7 +233,7 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 
 	case intent.ProviderAzure:
 		u.DataplaneDriver = DriverSocket
-		u.ServiceCIDR = "10.0.0.0/16"
+		u.ServiceCIDR = "10.240.0.0/16"
 		u.PodCIDR = "10.244.0.0/16"
 		u.NodeCIDR = cl.Network.VNetCIDR
 		u.StorageClass = "managed-csi"
@@ -254,10 +254,15 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 		extCNI, _ := json.Marshal(map[string]any{
 			"cniVersion": "0.3.1",
 			"name":       "external-net",
-			"type":       "dummy",
+			"type":       "bridge",
+			"bridge":     "br-ext",
+			"isGateway":  true,
+			"ipMasq":     false,
 			"ipam": map[string]any{
-				"type":   "host-local",
-				"subnet": extCIDR,
+				"type":       "host-local",
+				"subnet":     extCIDR,
+				"rangeStart": netcalc.IPAtOffset(extCIDR, 200),
+				"rangeEnd":   netcalc.IPAtOffset(extCIDR, 250),
 			},
 		})
 		u.Networks = append(u.Networks, NetworkAttachmentSpec{
@@ -279,10 +284,15 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 			intCNI, _ := json.Marshal(map[string]any{
 				"cniVersion": "0.3.1",
 				"name":       "internal-net",
-				"type":       "dummy",
+				"type":       "bridge",
+				"bridge":     "br-int",
+				"isGateway":  true,
+				"ipMasq":     false,
 				"ipam": map[string]any{
-					"type":   "host-local",
-					"subnet": intCIDR,
+					"type":       "host-local",
+					"subnet":     intCIDR,
+					"rangeStart": netcalc.IPAtOffset(intCIDR, 200),
+					"rangeEnd":   netcalc.IPAtOffset(intCIDR, 250),
 				},
 			})
 			u.Networks = append(u.Networks, NetworkAttachmentSpec{

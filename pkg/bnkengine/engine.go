@@ -422,10 +422,11 @@ func (e *Engine) Install(ctx context.Context, opts Options) (*RenderedOverlay, e
 		return nil, err
 	}
 
-	// Phase 1: Namespaces
+	// Phase 1: Namespaces & CoreDNS forwarder (for GKE kube-dns StatefulSet endpoint_pod_names resolution)
 	if err := phases.PhaseNamespaces(ctx, e.K8s, e.applyYAML, rendered.NamespacesYAML, effectiveTestNamespace(e.Cluster)); err != nil {
 		return nil, err
 	}
+	e.ensureCoreDNSForwarder(ctx, opts)
 
 	// Phase 2: Cert-Manager & FAR pull secrets & Multus
 	if err := phases.PhaseCertManagerAndMultus(ctx, e.K8s, e.Underlay.KubeconfigPath, opts.FARKeyJSON); err != nil {
@@ -445,18 +446,16 @@ func (e *Engine) Install(ctx context.Context, opts Options) (*RenderedOverlay, e
 		return nil, err
 	}
 
-	// Phase 4b: Ensure Gateway API & GIE CRDs are installed before CNEInstance.
-	// Note: BNK's own gateway.k8s.f5.com and inference.k8s.f5.com CRDs are installed by
-	// FLO's crd-installer when CNEInstance reconciles in Phase 5; pre-creating them with a
-	// different storage version breaks crd-installer on BNK 2.4.1.
-	for _, crdFile := range []string{
-		"static/00-gateway-api-crds.yaml",
-		"static/01-gie-crds.yaml",
-	} {
-		if crdBytes, rErr := manifests.FS.ReadFile(crdFile); rErr == nil && len(bytes.TrimSpace(crdBytes)) > 0 {
-			if aErr := e.applyYAML(ctx, crdBytes); aErr != nil {
-				opts.logf("warning: apply %s: %v", crdFile, aErr)
-			}
+	// Phase 4b: Ensure GIE CRDs are installed before CNEInstance.
+	// Note: Gateway API (gateway.networking.k8s.io), gateway.k8s.f5.com, and
+	// inference.k8s.f5.com CRDs are installed with full OpenAPI v3 schemas and
+	// defaults by FLO's crd-installer when CNEInstance reconciles in Phase 5.
+	// Pre-creating stub Gateway API CRDs causes crd-installer to skip them,
+	// leaving Gateway/HTTPRoute without OpenAPI defaults and triggering nil-pointer
+	// panics in f5-cne-controller.
+	if crdBytes, rErr := manifests.FS.ReadFile("static/01-gie-crds.yaml"); rErr == nil && len(bytes.TrimSpace(crdBytes)) > 0 {
+		if aErr := e.applyYAML(ctx, crdBytes); aErr != nil {
+			opts.logf("warning: apply static/01-gie-crds.yaml: %v", aErr)
 		}
 	}
 
@@ -475,14 +474,46 @@ func (e *Engine) Install(ctx context.Context, opts Options) (*RenderedOverlay, e
 		return nil, err
 	}
 
-	// Wait up to 180s for FLO crd-installer to establish licenses.k8s.f5net.com before applying License CRs
+	// Wait up to 300s for FLO crd-installer to establish licenses.k8s.f5net.com before applying License CRs
 	if e.Dyn != nil {
-		_ = k8s.WaitForCRDEstablished(ctx, e.Dyn, "licenses.k8s.f5net.com", 180*time.Second)
-		// If infras.gateway.k8s.f5.com was omitted by an older 2.4.0 pre-release crd-installer, apply supplemental CRDs
-		if err := k8s.WaitForCRDEstablished(ctx, e.Dyn, "infras.gateway.k8s.f5.com", 5*time.Second); err != nil {
-			if crdBytes, rErr := manifests.FS.ReadFile("static/02-bnk-gateway-crds.yaml"); rErr == nil && len(bytes.TrimSpace(crdBytes)) > 0 {
-				_ = e.applyYAML(ctx, crdBytes)
+		_ = k8s.WaitForCRDEstablished(ctx, e.Dyn, "licenses.k8s.f5net.com", 300*time.Second)
+		// Wait up to 180s for FLO crd-installer to install infras.gateway.k8s.f5.com;
+		// only fall back to bundled static CRDs on BNK 2.3.x (applying stub static CRDs on 2.4+ breaks OpenAPI defaults).
+		if err := k8s.WaitForCRDEstablished(ctx, e.Dyn, "infras.gateway.k8s.f5.com", 180*time.Second); err != nil {
+			if e.Profile != nil && strings.HasPrefix(e.Profile.Version, "2.3") {
+				for _, fallbackCRD := range []string{
+					"static/00-gateway-api-crds.yaml",
+					"static/02-bnk-gateway-crds.yaml",
+				} {
+					if crdBytes, rErr := manifests.FS.ReadFile(fallbackCRD); rErr == nil && len(bytes.TrimSpace(crdBytes)) > 0 {
+						_ = e.applyYAML(ctx, crdBytes)
+					}
+				}
 			}
+		}
+		for _, crdName := range []string{
+			"gatewayclasses.gateway.networking.k8s.io",
+			"gateways.gateway.networking.k8s.io",
+			"httproutes.gateway.networking.k8s.io",
+			"grpcroutes.gateway.networking.k8s.io",
+			"infras.gateway.k8s.f5.com",
+			"l2networks.gateway.k8s.f5.com",
+			"l3networks.gateway.k8s.f5.com",
+			"gatewaysettings.gateway.k8s.f5.com",
+			"egressgateways.gateway.k8s.f5.com",
+			"backends.gateway.k8s.f5.com",
+			"f5-big-dns-caches.k8s.f5net.com",
+		} {
+			_ = k8s.WaitForCRDEstablished(ctx, e.Dyn, crdName, 60*time.Second)
+		}
+	}
+
+	// Re-discover served API versions now that FLO crd-installer has registered Gateway/Inference CRDs
+	if e.Disc != nil && e.Profile != nil {
+		release.DiscoverServedAPIVersions(e.Disc, e.Profile)
+		if netYAML, egressYAML, rErr := renderUnifiedNetworkAndEgress(e.Cluster, e.Underlay, e.Profile); rErr == nil {
+			rendered.NetworkCRsYAML = netYAML
+			rendered.EgressYAML = egressYAML
 		}
 	}
 
@@ -513,9 +544,7 @@ func (e *Engine) Install(ctx context.Context, opts Options) (*RenderedOverlay, e
 	}
 
 	// Phase 9: Activation readiness check & cloud PostActivationHook
-	if _, err := phases.CheckCNEInstanceActivation(ctx, e.K8s, e.Dyn, e.Cluster.EffectiveName()+"-bnk"); err != nil {
-		opts.logf("warning: activation check reported error: %v", err)
-	}
+	e.waitForActivationAndDataplane(ctx, opts)
 	if e.Underlay.PostActivationHook != nil {
 		if err := e.Underlay.PostActivationHook(ctx, e.K8s, e.Dyn); err != nil {
 			return nil, fmt.Errorf("post-activation hook: %w", err)
@@ -528,6 +557,85 @@ func (e *Engine) Install(ctx context.Context, opts Options) (*RenderedOverlay, e
 	}
 
 	return rendered, nil
+}
+
+func (e *Engine) waitForActivationAndDataplane(ctx context.Context, opts Options) {
+	if e.K8s == nil || e.Dyn == nil {
+		return
+	}
+	cneName := e.Cluster.EffectiveName() + "-bnk"
+	deadline := time.Now().Add(10 * time.Minute)
+	lastHeal := time.Now()
+	for time.Now().Before(deadline) {
+		if time.Since(lastHeal) >= 20*time.Second {
+			_ = phases.ReconcileNullCNEController(ctx, e.K8s, e.Dyn)
+			_, _ = RunHeal(ctx, e.K8s, e.Dyn, HealOptions{
+				Cluster:  e.Cluster,
+				Underlay: e.Underlay,
+				Profile:  e.Profile,
+			})
+			_ = phases.PhaseLicense(ctx, e.K8s, nil, nil, "")
+			lastHeal = time.Now()
+		}
+		st, err := phases.CheckCNEInstanceActivation(ctx, e.K8s, e.Dyn, cneName)
+		if err == nil && st != nil && st.CNEControllerAvailable && st.F5TmmAvailable && st.ReadyTMMPods > 0 {
+			opts.logf("[bnkengine] CNEInstance %s active (ReadyTMMPods=%d/%d)", cneName, st.ReadyTMMPods, st.TotalTMMPods)
+			break
+		}
+		phases.CycleStuckTMMPods(ctx, e.K8s)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(10 * time.Second):
+		}
+	}
+
+	// Also wait up to 90s for BNK 2.4+ Infra + EgressGateway (or 2.3 F5BigNetVlans) to report Programmed=True
+	vlanGVR := schema.GroupVersionResource{Group: "k8s.f5net.com", Version: "v1", Resource: "f5-big-net-vlans"}
+	infraVer := "v1alpha1"
+	if e.Profile != nil && e.Profile.ServedGatewayAPIVersion != "" {
+		infraVer = strings.TrimPrefix(e.Profile.ServedGatewayAPIVersion, "gateway.k8s.f5.com/")
+	}
+	infraGVR := schema.GroupVersionResource{Group: "gateway.k8s.f5.com", Version: infraVer, Resource: "infras"}
+	egressGVR := schema.GroupVersionResource{Group: "gateway.k8s.f5.com", Version: infraVer, Resource: "egressgateways"}
+	isGatewayInfra := e.Profile != nil && e.Profile.NetworkModel == release.NetworkModelGatewayInfra
+
+	dpDeadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(dpDeadline) {
+		dpOK := false
+		if isGatewayInfra {
+			infraProg := false
+			if infraObj, err := e.Dyn.Resource(infraGVR).Namespace(bnkconst.InstanceNamespace).Get(ctx, "infra", metav1.GetOptions{}); err == nil && infraObj != nil {
+				infraProg = k8s.UnstructuredConditionIsTrue(infraObj.Object, "Programmed")
+			}
+			egressProg := true
+			if e.Cluster != nil && e.Cluster.Egress.Enabled {
+				egressNS := effectiveTestNamespace(e.Cluster)
+				egressProg = false
+				if egObj, err := e.Dyn.Resource(egressGVR).Namespace(egressNS).Get(ctx, "egress-gw", metav1.GetOptions{}); err == nil && egObj != nil {
+					egressProg = k8s.UnstructuredConditionIsTrue(egObj.Object, "Programmed")
+				}
+			}
+			dpOK = infraProg && egressProg
+		} else if list, err := e.Dyn.Resource(vlanGVR).Namespace(bnkconst.InstanceNamespace).List(ctx, metav1.ListOptions{}); err == nil && len(list.Items) >= len(e.Underlay.Networks) {
+			allProg := true
+			for _, item := range list.Items {
+				if !k8s.UnstructuredConditionIsTrue(item.Object, "Programmed") {
+					allProg = false
+					break
+				}
+			}
+			dpOK = allProg
+		}
+		if dpOK {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+		}
+	}
 }
 
 // OverlayStateKeys lists all state.env keys written by BNK overlay installation
@@ -654,14 +762,28 @@ func bnkOverlayCleanupGVRs() []schema.GroupVersionResource {
 		{Group: "fic.f5.com", Version: "v1", Resource: "infras"},
 		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "l4globalpolicies"},
 		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "apppolicies"},
+		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "netpolicies"},
+		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "secpolicies"},
+		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "f5epps"},
 		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "l4routes"},
 		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "egressgateways"},
 		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "gatewaysettings"},
+		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "backends"},
 		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "infras"},
+		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "l3networks"},
+		{Group: "gateway.k8s.f5.com", Version: "v1alpha1", Resource: "l2networks"},
+		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "l4globalpolicies"},
+		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "apppolicies"},
+		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "netpolicies"},
+		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "secpolicies"},
+		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "f5epps"},
 		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "l4routes"},
 		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "egressgateways"},
 		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "gatewaysettings"},
+		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "backends"},
 		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "infras"},
+		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "l3networks"},
+		{Group: "gateway.k8s.f5.com", Version: "v1", Resource: "l2networks"},
 		{Group: "gateway.k8s.f5net.com", Version: "v1", Resource: "l4routes"},
 		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"},
 		{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "grpcroutes"},
@@ -669,6 +791,9 @@ func bnkOverlayCleanupGVRs() []schema.GroupVersionResource {
 		{Group: "gateway.k8s.f5net.com", Version: "v1", Resource: "gatewaysettings"},
 		{Group: "k8s.f5net.com", Version: "v1", Resource: "egressgateways"},
 		{Group: "k8s.f5net.com", Version: "v1", Resource: "infras"},
+		{Group: "k8s.f5net.com", Version: "v1", Resource: "f5-big-cne-irules"},
+		{Group: "k8s.f5net.com", Version: "v1", Resource: "f5-big-irules"},
+		{Group: "k8s.f5net.com", Version: "v1", Resource: "f5-big-fw-policies"},
 		{Group: "k8s.f5net.com", Version: "v1", Resource: "f5-big-dns-caches"},
 		{Group: "k8s.f5net.com", Version: "v1", Resource: "f5-big-persistence-profiles"},
 		{Group: "k8s.f5net.com", Version: "v1", Resource: "f5-spk-egress"},
@@ -697,9 +822,18 @@ func (e *Engine) cleanupBNKOverlayCRs(ctx context.Context) {
 		bnkconst.InstanceNamespace,
 		bnkconst.CoreNamespace,
 		bnkconst.UtilsNamespace,
+		"f5-bnk-instance",
 		"f5-bnk",
 		"aigateway",
+		"vllm-semantic-router-system",
+		"agentfoundry",
+		"llm-egress",
+		"bnk-demo",
+		"egress-demo",
 		"default",
+	}
+	if testNS := effectiveTestNamespace(e.Cluster); testNS != "" && testNS != "default" && testNS != "llm-egress" {
+		namespaces = append(namespaces, testNS)
 	}
 	for _, ns := range namespaces {
 		for _, gvr := range gvrs {
@@ -942,36 +1076,42 @@ func renderUnifiedNADs(u *provider.UnderlayContext) ([]byte, error) {
 		return nil, fmt.Errorf("render NADs: underlay has no networks")
 	}
 	var docs []string
-	for _, netSpec := range u.Networks {
-		cniJSON := strings.TrimSpace(netSpec.CNIConfigJSON)
-		if cniJSON == "" {
-			cniType := "macvlan"
-			if u.DataplaneDriver == provider.DriverDPDKPCI {
-				cniType = "host-device"
+	nadNamespaces := []string{bnkconst.InstanceNamespace}
+	if u.CloudName == intent.ProviderAzure {
+		nadNamespaces = []string{bnkconst.InstanceNamespace, "default"}
+	}
+	for _, ns := range nadNamespaces {
+		for _, netSpec := range u.Networks {
+			cniJSON := strings.TrimSpace(netSpec.CNIConfigJSON)
+			if cniJSON == "" {
+				cniType := "macvlan"
+				if u.DataplaneDriver == provider.DriverDPDKPCI {
+					cniType = "host-device"
+				}
+				raw, _ := json.Marshal(map[string]any{
+					"cniVersion": "0.3.1",
+					"name":       netSpec.Name,
+					"type":       cniType,
+				})
+				cniJSON = string(raw)
 			}
-			raw, _ := json.Marshal(map[string]any{
-				"cniVersion": "0.3.1",
-				"name":       netSpec.Name,
-				"type":       cniType,
-			})
-			cniJSON = string(raw)
+			obj := map[string]any{
+				"apiVersion": "k8s.cni.cncf.io/v1",
+				"kind":       "NetworkAttachmentDefinition",
+				"metadata": map[string]any{
+					"name":      netSpec.Name,
+					"namespace": ns,
+				},
+				"spec": map[string]any{
+					"config": cniJSON,
+				},
+			}
+			b, err := yaml.Marshal(obj)
+			if err != nil {
+				return nil, fmt.Errorf("marshal NAD %s (%s): %w", netSpec.Name, ns, err)
+			}
+			docs = append(docs, strings.TrimSpace(string(b)))
 		}
-		obj := map[string]any{
-			"apiVersion": "k8s.cni.cncf.io/v1",
-			"kind":       "NetworkAttachmentDefinition",
-			"metadata": map[string]any{
-				"name":      netSpec.Name,
-				"namespace": bnkconst.InstanceNamespace,
-			},
-			"spec": map[string]any{
-				"config": cniJSON,
-			},
-		}
-		b, err := yaml.Marshal(obj)
-		if err != nil {
-			return nil, fmt.Errorf("marshal NAD %s: %w", netSpec.Name, err)
-		}
-		docs = append(docs, strings.TrimSpace(string(b)))
 	}
 	return []byte(strings.Join(docs, "\n---\n") + "\n"), nil
 }
@@ -1042,6 +1182,9 @@ func renderUnifiedCNEInstance(cl *intent.Cluster, u *provider.UnderlayContext, p
 	tmmMem := "8Gi"
 	tmmHuge := "2Gi"
 	palCPUSet := "0-1"
+	if u.CloudName == intent.ProviderAzure {
+		palCPUSet = "0,2"
+	}
 	imageReg := "repo.f5.com"
 	if cl.Bnk != nil {
 		if cl.Bnk.DeploymentSize != "" {
@@ -1097,7 +1240,9 @@ func renderUnifiedCNEInstance(cl *intent.Cluster, u *provider.UnderlayContext, p
 	}
 	if u.DataplaneDriver != provider.DriverVirtio {
 		tmmEnvMap["TMM_MTU"] = fmt.Sprintf("%d", mtu)
-		tmmEnvMap["TMM_INTERFACES"] = strings.Join(tmmIfaces, ",")
+		if u.CloudName != intent.ProviderAzure {
+			tmmEnvMap["TMM_INTERFACES"] = strings.Join(tmmIfaces, ",")
+		}
 		tmmEnvMap["PAL_CPU_SET"] = palCPUSet
 		tmmEnvMap["TMM_CALICO_ROUTER"] = "default"
 		var k8sRoutes []string
@@ -1117,7 +1262,9 @@ func renderUnifiedCNEInstance(cl *intent.Cluster, u *provider.UnderlayContext, p
 	}
 	switch u.DataplaneDriver {
 	case provider.DriverSocket:
-		tmmEnvMap["TMM_SKIP_NICS"] = "eth0"
+		if u.CloudName != intent.ProviderAzure {
+			tmmEnvMap["TMM_SKIP_NICS"] = "eth0"
+		}
 		tmmEnvMap["TMM_GENERIC_SOCKET_DRIVER"] = "true"
 		tmmEnvMap["TMM_MAPRES_ADDL_VETHS_ON_DP"] = "TRUE"
 		tmmEnvMap["TMM_MAPRES_IFC_CLAIM_LIST"] = claimList
@@ -1125,6 +1272,16 @@ func renderUnifiedCNEInstance(cl *intent.Cluster, u *provider.UnderlayContext, p
 		tmmEnvMap["TMM_GENERIC_SOCKET_DRIVER"] = "true"
 		tmmEnvMap["TMM_MAPRES_ADDL_VETHS_ON_DP"] = "TRUE"
 		tmmEnvMap["TMM_MAPRES_IFC_CLAIM_LIST"] = claimList
+		var k8sRoutes []string
+		for _, cidr := range []string{u.ServiceCIDR, u.PodCIDR, u.NodeCIDR} {
+			if trimmed := strings.TrimSpace(cidr); trimmed != "" {
+				k8sRoutes = append(k8sRoutes, trimmed)
+			}
+		}
+		if len(k8sRoutes) > 0 {
+			tmmEnvMap["TMM_CALICO_ROUTER"] = "default"
+			tmmEnvMap[render.TMMK8sRoutesEnv] = strings.Join(k8sRoutes, ",")
+		}
 		extPCI := "0000:00:05.0"
 		intPCI := "0000:00:06.0"
 		if len(u.DataplaneNodes) > 0 {
@@ -1227,6 +1384,12 @@ func renderUnifiedCNEInstance(cl *intent.Cluster, u *provider.UnderlayContext, p
 	}
 	hasExplicitTMMRes := cl.Bnk != nil && (cl.Bnk.TmmCpu != "" || cl.Bnk.TmmMemory != "" || cl.Bnk.TmmHugepages != "")
 	if u.DataplaneDriver != provider.DriverVirtio || hasExplicitTMMRes {
+		reqCPU := tmmCPU
+		reqMem := tmmMem
+		if u.CloudName == intent.ProviderAzure && !hasExplicitTMMRes {
+			reqCPU = "1"
+			reqMem = "4Gi"
+		}
 		tmmAdv["resources"] = map[string]any{
 			"limits": map[string]any{
 				"cpu":           tmmCPU,
@@ -1234,8 +1397,8 @@ func renderUnifiedCNEInstance(cl *intent.Cluster, u *provider.UnderlayContext, p
 				"hugepages-2Mi": tmmHuge,
 			},
 			"requests": map[string]any{
-				"cpu":           tmmCPU,
-				"memory":        tmmMem,
+				"cpu":           reqCPU,
+				"memory":        reqMem,
 				"hugepages-2Mi": tmmHuge,
 			},
 		}
@@ -1373,7 +1536,15 @@ func renderUnifiedGatewayClass(cl *intent.Cluster) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read host-device/gatewayclass.yaml.tmpl: %w", err)
 	}
-	return render.RenderGatewayClass(tmpl, cl)
+	primary, err := render.RenderGatewayClass(tmpl, cl)
+	if err != nil {
+		return nil, err
+	}
+	canonical := "apiVersion: gateway.networking.k8s.io/v1\nkind: GatewayClass\nmetadata:\n  name: f5-gateway-class\nspec:\n  controllerName: f5.com/f5-cne-system-f5-cne-controller\n"
+	if cl != nil && cl.EffectiveName()+"-gatewayclass" != "f5-gateway-class" {
+		return []byte(strings.TrimSpace(string(primary)) + "\n---\n" + canonical), nil
+	}
+	return primary, nil
 }
 
 func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayContext, prof *release.ReleaseProfile) ([]byte, []byte, error) {
@@ -1513,13 +1684,6 @@ func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 		}
 	}
 
-	extPool := map[string]any{
-		"rangeStart": extStart,
-		"rangeEnd":   extEnd,
-	}
-	if az != "" {
-		extPool["availabilityZone"] = az
-	}
 	listenerStart, listenerEnd := extStart, extEnd
 	if len(ext.SelfIPs) > 0 && strings.Contains(ext.SelfIPs[0], "/") {
 		if ip, ipNet, err := net.ParseCIDR(ext.SelfIPs[0]); err == nil && ipNet != nil {
@@ -1527,11 +1691,20 @@ func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 			if bits == 32 && ones >= 28 {
 				if v4 := ip.Mask(ipNet.Mask).To4(); v4 != nil {
 					hostCount := byte(1 << (32 - ones))
+					extStart = net.IPv4(v4[0], v4[1], v4[2], v4[3]).String()
+					extEnd = net.IPv4(v4[0], v4[1], v4[2], v4[3]+2).String()
 					listenerStart = net.IPv4(v4[0], v4[1], v4[2], v4[3]+3).String()
 					listenerEnd = net.IPv4(v4[0], v4[1], v4[2], v4[3]+hostCount-2).String()
 				}
 			}
 		}
+	}
+	extPool := map[string]any{
+		"rangeStart": extStart,
+		"rangeEnd":   extEnd,
+	}
+	if az != "" {
+		extPool["availabilityZone"] = az
 	}
 	if listenerStart == extStart && listenerEnd == extEnd {
 		if ip, ipNet, err := net.ParseCIDR(ext.SubnetCIDR); err == nil && ipNet != nil {
@@ -1563,6 +1736,13 @@ func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 		},
 	}
 
+	extNetName := render.InfraExtNetwork
+	intNetName := render.InfraIntNetwork
+	if u.CloudName == intent.ProviderAzure {
+		extNetName = "external"
+		intNetName = "internal"
+	}
+
 	netAttachments := []map[string]any{
 		{
 			"name": "ext-attach",
@@ -1574,7 +1754,7 @@ func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 
 	networks := []map[string]any{
 		{
-			"name": render.InfraExtNetwork,
+			"name": extNetName,
 			"type": "vlan",
 			"vlan": map[string]any{
 				"tag": 0,
@@ -1591,6 +1771,17 @@ func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 
 	if intNet != nil {
 		intStart, intEnd, _ := ipRangeFromSelfIPs(intNet.SelfIPs, intNet.SubnetCIDR)
+		if len(intNet.SelfIPs) > 0 && strings.Contains(intNet.SelfIPs[0], "/") {
+			if ip, ipNet, err := net.ParseCIDR(intNet.SelfIPs[0]); err == nil && ipNet != nil {
+				ones, bits := ipNet.Mask.Size()
+				if bits == 32 && ones >= 28 {
+					if v4 := ip.Mask(ipNet.Mask).To4(); v4 != nil {
+						intStart = net.IPv4(v4[0], v4[1], v4[2], v4[3]).String()
+						intEnd = net.IPv4(v4[0], v4[1], v4[2], v4[3]+2).String()
+					}
+				}
+			}
+		}
 		intPool := map[string]any{
 			"rangeStart": intStart,
 			"rangeEnd":   intEnd,
@@ -1611,7 +1802,7 @@ func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 			},
 		})
 		networks = append(networks, map[string]any{
-			"name": render.InfraIntNetwork,
+			"name": intNetName,
 			"type": "vlan",
 			"vlan": map[string]any{
 				"tag": 0,
@@ -1628,24 +1819,33 @@ func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 
 	staticRoutes := []map[string]any{}
 	if ext.GatewayIP != "" {
+		if u.DataplaneDriver == provider.DriverVirtio {
+			staticRoutes = append(staticRoutes, map[string]any{
+				"name":         "route-ext-gw",
+				"destinations": []string{ext.GatewayIP + "/32"},
+				"networkRef": map[string]any{
+					"name": extNetName,
+				},
+			})
+		}
 		staticRoutes = append(staticRoutes, map[string]any{
 			"name":         render.InfraRouteDefault,
 			"destinations": []string{"0.0.0.0/0"},
 			"nextHop":      ext.GatewayIP,
 		})
 	}
-	if u.ServiceCIDR != "" {
-		gw := ext.GatewayIP
-		if intNet != nil && intNet.GatewayIP != "" {
-			gw = intNet.GatewayIP
-		}
-		if gw != "" {
-			staticRoutes = append(staticRoutes, map[string]any{
-				"name":         "service-cidr",
-				"destinations": []string{u.ServiceCIDR},
-				"nextHop":      gw,
-			})
-		}
+	clusterEastWestGW := ext.GatewayIP
+	if intNet != nil && intNet.GatewayIP != "" {
+		clusterEastWestGW = intNet.GatewayIP
+	} else if u.DataplaneDriver == provider.DriverVirtio {
+		clusterEastWestGW = "169.254.1.1"
+	}
+	if u.ServiceCIDR != "" && clusterEastWestGW != "" {
+		staticRoutes = append(staticRoutes, map[string]any{
+			"name":         "service-cidr",
+			"destinations": []string{u.ServiceCIDR},
+			"nextHop":      clusterEastWestGW,
+		})
 	}
 	var podCIDRs []string
 	if cl != nil && len(cl.Network.Subnets.PrivateList) > 0 {
@@ -1662,23 +1862,24 @@ func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 			}
 		}
 	}
-	if len(podCIDRs) > 0 {
-		gw := ext.GatewayIP
-		if intNet != nil && intNet.GatewayIP != "" {
-			gw = intNet.GatewayIP
-		}
-		if gw != "" {
-			staticRoutes = append(staticRoutes, map[string]any{
-				"name":         "pod-cidr",
-				"destinations": podCIDRs,
-				"nextHop":      gw,
-			})
-		}
+	if len(podCIDRs) > 0 && clusterEastWestGW != "" {
+		staticRoutes = append(staticRoutes, map[string]any{
+			"name":         "pod-cidr",
+			"destinations": podCIDRs,
+			"nextHop":      clusterEastWestGW,
+		})
+	}
+	if u.DataplaneDriver == provider.DriverVirtio && intNet == nil && strings.TrimSpace(u.NodeCIDR) != "" {
+		staticRoutes = append(staticRoutes, map[string]any{
+			"name":         "mgmt-nodes",
+			"destinations": []string{strings.TrimSpace(u.NodeCIDR)},
+			"nextHop":      clusterEastWestGW,
+		})
 	}
 
-	egressNet := render.InfraExtNetwork
-	if intNet != nil {
-		egressNet = render.InfraIntNetwork
+	egressNet := extNetName
+	if intNet != nil && u.DataplaneDriver != provider.DriverVirtio && u.CloudName != intent.ProviderAzure {
+		egressNet = intNetName
 	}
 
 	infraSpec := map[string]any{
@@ -1737,7 +1938,7 @@ func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 					{"name": "listener-pool"},
 				},
 				"networkRefs": []map[string]any{
-					{"name": render.InfraExtNetwork},
+					{"name": extNetName},
 				},
 				"sourceNATConfig": map[string]any{
 					"type": "Automap",
@@ -1761,6 +1962,10 @@ func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 	}
 
 	testNS := effectiveTestNamespace(cl)
+	matchNames := []string{testNS}
+	if u != nil && u.DataplaneDriver == provider.DriverVirtio && testNS != "default" {
+		matchNames = append(matchNames, "default")
+	}
 	egressObj := map[string]any{
 		"apiVersion": gwAPIVer,
 		"kind":       "EgressGateway",
@@ -1779,7 +1984,7 @@ func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 			"sourceSelector": map[string]any{
 				"selectionMode": "NamespaceSelector",
 				"namespaces": map[string]any{
-					"matchNames": []string{testNS},
+					"matchNames": matchNames,
 				},
 			},
 		},
@@ -1918,6 +2123,24 @@ func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 				}
 			}
 		}
+		nameServers := []map[string]any{
+			{
+				"ipAddress": dnsIP,
+				"port":      53,
+			},
+		}
+		if u != nil && u.DataplaneDriver == provider.DriverVirtio {
+			nameServers = []map[string]any{
+				{
+					"ipAddress": "8.8.8.8",
+					"port":      53,
+				},
+				{
+					"ipAddress": "1.1.1.1",
+					"port":      53,
+				},
+			}
+		}
 		dnsObj := map[string]any{
 			"apiVersion": "k8s.f5net.com/v1",
 			"kind":       "F5BigDnsCache",
@@ -1931,12 +2154,7 @@ func renderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 					"forwardZones": []map[string]any{
 						{
 							"forwardZone": ".",
-							"nameServers": []map[string]any{
-								{
-									"ipAddress": dnsIP,
-									"port":      53,
-								},
-							},
+							"nameServers": nameServers,
 						},
 					},
 				},
@@ -2080,4 +2298,34 @@ func SyncCPCLKeySecret(ctx context.Context, k8sClient kubernetes.Interface, jwks
 // as null before CNEInstance reconciliation (BNK 2.4 quirk).
 func ReconcileNullCNEController(ctx context.Context, k8sClient kubernetes.Interface, dynClient dynamic.Interface) error {
 	return phases.ReconcileNullCNEController(ctx, k8sClient, dynClient)
+}
+
+func (e *Engine) ensureCoreDNSForwarder(ctx context.Context, opts Options) {
+	if e.K8s == nil {
+		return
+	}
+	cm, err := e.K8s.CoreV1().ConfigMaps("kube-system").Get(ctx, "kube-dns", metav1.GetOptions{})
+	if err != nil || cm == nil {
+		return
+	}
+	fwdBytes, err := manifests.FS.ReadFile("static/03-coredns-forwarder.yaml")
+	if err != nil {
+		opts.logf("warning: read static/03-coredns-forwarder.yaml: %v", err)
+		return
+	}
+	if err := e.applyYAML(ctx, fwdBytes); err != nil {
+		opts.logf("warning: apply static/03-coredns-forwarder.yaml: %v", err)
+		return
+	}
+	svc, err := e.K8s.CoreV1().Services("kube-system").Get(ctx, "coredns-f5", metav1.GetOptions{})
+	if err == nil && svc != nil && svc.Spec.ClusterIP != "" {
+		if cm.Data == nil {
+			cm.Data = map[string]string{}
+		}
+		stub := fmt.Sprintf(`{"f5-cne-core.svc.cluster.local":["%s"],"f5-cne-system.svc.cluster.local":["%s"]}`, svc.Spec.ClusterIP, svc.Spec.ClusterIP)
+		if cm.Data["stubDomains"] != stub {
+			cm.Data["stubDomains"] = stub
+			_, _ = e.K8s.CoreV1().ConfigMaps("kube-system").Update(ctx, cm, metav1.UpdateOptions{})
+		}
+	}
 }

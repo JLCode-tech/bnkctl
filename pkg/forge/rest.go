@@ -333,6 +333,33 @@ func restCreateProject(ctx context.Context, base, token string, req RegisterRequ
 		Success   bool        `json:"success"`
 	}
 	err := restPost(ctx, base+"/api/projects", token, body, &resp)
+	if err != nil && req.CredentialTemplateID > 0 && strings.Contains(err.Error(), "IntegrityError") {
+		var templates []struct {
+			ID        int    `json:"id"`
+			Provider  string `json:"provider"`
+			IsDefault bool   `json:"is_default"`
+		}
+		resolvedID := 0
+		if getErr := restGet(ctx, base+"/api/credential-templates", token, &templates); getErr == nil {
+			for _, t := range templates {
+				if strings.EqualFold(t.Provider, cloudProvider) {
+					if t.IsDefault {
+						resolvedID = t.ID
+						break
+					}
+					if resolvedID == 0 {
+						resolvedID = t.ID
+					}
+				}
+			}
+		}
+		if resolvedID > 0 && resolvedID != req.CredentialTemplateID {
+			body["credential_template_id"] = resolvedID
+		} else {
+			delete(body, "credential_template_id")
+		}
+		err = restPost(ctx, base+"/api/projects", token, body, &resp)
+	}
 	if err != nil {
 		if isConflictHTTP(err) {
 			return restFindProjectByName(ctx, base, token, req.ProjectName)
@@ -424,7 +451,10 @@ func restCreateCluster(ctx context.Context, base, token string, projectID int, r
 			}
 			var updated restCluster
 			if putErr := restPut(ctx, updateURL, token, updateBody, &updated); putErr != nil {
-				return restCluster{}, fmt.Errorf("update cluster %d: %w", existing.ID, putErr)
+				fallbackURL := fmt.Sprintf("%s/api/k8s/clusters/%d", base, existing.ID)
+				if fbErr := restPut(ctx, fallbackURL, token, updateBody, &updated); fbErr != nil {
+					return restCluster{}, fmt.Errorf("update cluster %d: %w", existing.ID, putErr)
+				}
 			}
 			if updated.ID == 0 {
 				updated = existing

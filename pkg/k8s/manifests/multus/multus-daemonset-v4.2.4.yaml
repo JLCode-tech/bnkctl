@@ -69,7 +69,10 @@ rules:
       - pods/status
     verbs:
       - get
+      - list
+      - watch
       - update
+      - patch
   - apiGroups:
       - ""
       - events.k8s.io

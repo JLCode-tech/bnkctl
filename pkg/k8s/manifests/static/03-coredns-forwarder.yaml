@@ -5,7 +5,7 @@ metadata:
   namespace: kube-system
 data:
   Corefile: |
-    f5-cne-core.svc.cluster.local:53 {
+    f5-cne-core.svc.cluster.local:53 f5-cne-system.svc.cluster.local:53 {
         errors
         cache 30
         kubernetes cluster.local in-addr.arpa ip6.arpa {

@@ -23,7 +23,7 @@ rules:
     verbs: ["*"]
   - apiGroups: [""]
     resources: ["pods", "pods/status"]
-    verbs: ["get", "update"]
+    verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
