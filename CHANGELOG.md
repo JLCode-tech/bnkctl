@@ -2,6 +2,19 @@
 
 All notable changes to `bnkctl` are documented in this file.
 
+## [2.6.0](https://github.com/JLCode-tech/bnkctl/compare/v2.5.0...v2.6.0) (2026-11-04)
+
+
+### Features
+
+* **bnkengine:** unify BNK 2.4.1 dataplane routing, self-healing, and overlay CRDs across AWS/Azure/GKE ([#6](https://github.com/JLCode-tech/bnkctl/issues/6)) ([1a69067](https://github.com/JLCode-tech/bnkctl/commit/1a6906748fff290f80beb734bbee2d6a35df89b2))
+* **examples:** upstream BNK 2.4.1 AI Gateway and MCP agent demo fixes for AWS, Azure, and GKE ([#8](https://github.com/JLCode-tech/bnkctl/issues/8)) ([9ad7f3a](https://github.com/JLCode-tech/bnkctl/commit/9ad7f3ae87d6746995865e4ffa4e2eb317da92eb))
+
+
+### Bug Fixes
+
+* **providers:** harden AWS eventual consistency, Azure CoreDNS/teardown, and GCP Phase 51 route drift ([#7](https://github.com/JLCode-tech/bnkctl/issues/7)) ([c1c64f3](https://github.com/JLCode-tech/bnkctl/commit/c1c64f31bf5a9ef2b4a4d7d07c7b8bf356dd5293))
+
 ## [2.5.0](https://github.com/JLCode-tech/bnkctl/compare/v2.4.1...v2.5.0) (2026-10-29)
 
 
