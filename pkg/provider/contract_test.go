@@ -308,3 +308,34 @@ func TestProviderOverlayContractMatrix(t *testing.T) {
 		}
 	}
 }
+
+// TestDataplaneTraitsContract verifies that EnsureTraits populates the canonical
+// underlay capability traits for AWS (DriverDPDKPCI), Azure (DriverSocket), and GCP (DriverVirtio).
+func TestDataplaneTraitsContract(t *testing.T) {
+	awsU := &provider.UnderlayContext{
+		CloudName:       intent.ProviderAWS,
+		DataplaneDriver: provider.DriverDPDKPCI,
+	}
+	awsTraits := awsU.EnsureTraits()
+	if !awsTraits.UseVFIOHostDevice || !awsTraits.EmitSNATEgressPool || !awsTraits.IncludeClusterDNSInTMMResolver {
+		t.Fatalf("unexpected AWS traits: %+v", awsTraits)
+	}
+
+	azrU := &provider.UnderlayContext{
+		CloudName:       intent.ProviderAzure,
+		DataplaneDriver: provider.DriverSocket,
+	}
+	azrTraits := azrU.EnsureTraits()
+	if !azrTraits.UseKernelSocketMode || !azrTraits.RenderDefaultNamespaceNADs || !azrTraits.UseShortInfraNetworkNames || !azrTraits.OmitTMMInterfacesAndSkipNICs || azrTraits.DefaultRouteDomain0MTU != 1390 || azrTraits.DefaultPalCPUSet != "0,2" {
+		t.Fatalf("unexpected Azure traits: %+v", azrTraits)
+	}
+
+	gcpU := &provider.UnderlayContext{
+		CloudName:       intent.ProviderGCP,
+		DataplaneDriver: provider.DriverVirtio,
+	}
+	gcpTraits := gcpU.EnsureTraits()
+	if !gcpTraits.UseVirtioMode || !gcpTraits.UseCalicoVXLANGateway || !gcpTraits.SuppressDefaultRouteOnExternal || !gcpTraits.PreserveHostDeviceIPs || !gcpTraits.IncludeNodeCIDRInK8sRoutes || gcpTraits.DefaultMTU != 1460 {
+		t.Fatalf("unexpected GCP traits: %+v", gcpTraits)
+	}
+}
