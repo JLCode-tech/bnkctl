@@ -9,6 +9,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEMO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${DEMO_DIR}/../.." && pwd)"
 
+if [ -f "${REPO_ROOT}/examples/common/bnk-aigw-lib.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${REPO_ROOT}/examples/common/bnk-aigw-lib.sh"
+fi
+
 CLUSTER="${1:-${CLUSTER:-bnk-agentfoundry-demo}}"
 CFG="${CFG:-${DEMO_DIR}/cluster.yaml}"
 BNK_NS="${BNK_NS:-f5-cne-system}"
@@ -261,7 +266,9 @@ if [ -n "${AZRBNKCTL_BIN}" ] && curl -sS -m 3 -o /dev/null "${FORGE_URL}/api/aut
 fi
 
 # Ensure f5-toda-fluentd-custom retains stdout.conf alongside aigw-hsl.pipeline
-if kubectl get configmap f5-toda-fluentd-custom -n f5-cne-core >/dev/null 2>&1; then
+if declare -F bnk_ensure_toda_fluentd_stdout >/dev/null 2>&1; then
+  bnk_ensure_toda_fluentd_stdout "f5-cne-core"
+elif kubectl get configmap f5-toda-fluentd-custom -n f5-cne-core >/dev/null 2>&1; then
   HAS_STDOUT="$(kubectl get configmap f5-toda-fluentd-custom -n f5-cne-core -o jsonpath='{.data.stdout\.conf}' 2>/dev/null || true)"
   if [ -z "${HAS_STDOUT}" ]; then
     echo "Restoring stdout.conf in f5-cne-core/f5-toda-fluentd-custom for bnkgov-collector -> Loki streaming..."

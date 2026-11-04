@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/JLCode-tech/bnkctl/pkg/bnkconst"
 	"github.com/JLCode-tech/bnkctl/pkg/intent"
 	"github.com/JLCode-tech/bnkctl/pkg/jumphost"
 	"github.com/JLCode-tech/bnkctl/pkg/netcalc"
@@ -17,6 +18,56 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+)
+
+// Canonical cloud network, interface, and IPAM defaults used across underlay
+// builders and provider discovery.
+const (
+	CNIVersionDefault = "0.3.1"
+
+	NetNameExternal = "external-net"
+	NetNameInternal = "internal-net"
+	NetRoleExternal = "external"
+	NetRoleInternal = "internal"
+
+	DefaultLinuxExtNIC    = "eth1"
+	DefaultLinuxIntNIC    = "eth2"
+	DefaultAWSLinuxExtNIC = "ens8"
+	DefaultAWSLinuxIntNIC = "ens7"
+	DefaultAWSExtPCIBDF   = "0000:28:00.0"
+	DefaultAWSIntPCIBDF   = "0000:29:00.0"
+	DefaultAzureBridgeExt = "br-ext"
+	DefaultAzureBridgeInt = "br-int"
+
+	TMMInterfaceDPDKExt   = "1.1"
+	TMMInterfaceDPDKInt   = "1.2"
+	TMMInterfaceSocketExt = "0.2"
+	TMMInterfaceSocketInt = "0.3"
+
+	DefaultFloatingIPOffset           = 10
+	DefaultSelfIP1Offset              = 11
+	DefaultSelfIP2Offset              = 12
+	DefaultGCPSelfIP1Offset           = 10
+	DefaultGCPSelfIP2Offset           = 11
+	DefaultBridgeIPAMRangeStartOffset = 200
+	DefaultBridgeIPAMRangeEndOffset   = 250
+
+	DefaultAWSServiceCIDR        = "172.20.0.0/16"
+	DefaultAWSPodCIDR            = "192.168.0.0/16"
+	DefaultAWSExternalSubnetCIDR = "10.90.100.0/24"
+	DefaultAWSStorageClass       = "gp2"
+
+	DefaultAzureServiceCIDR        = "10.240.0.0/16"
+	DefaultAzurePodCIDR            = "10.244.0.0/16"
+	DefaultAzureExternalSubnetCIDR = "10.90.3.0/24"
+	DefaultAzureInternalSubnetCIDR = "10.90.4.0/24"
+	DefaultAzureStorageClass       = "managed-csi"
+
+	DefaultGCPServiceCIDR        = "10.96.0.0/20"
+	DefaultGCPPodCIDR            = "10.92.0.0/14"
+	DefaultGCPExternalSubnetCIDR = "10.90.2.0/24"
+	DefaultGCPInternalSubnetCIDR = "10.90.3.0/24"
+	DefaultGCPStorageClass       = "standard-rwo"
 )
 
 // DataplaneDriver identifies how TMM binds to secondary dataplane interfaces.
@@ -30,6 +81,114 @@ const (
 	// DriverVirtio uses virtio dataplane interfaces ("1.1", "1.2") — e.g. GCP.
 	DriverVirtio DataplaneDriver = "virtio"
 )
+
+// DataplaneTraits models the declarative underlay physics and dataplane capabilities
+// so the BNK overlay engine and manifest renderer do not branch on ad-hoc cloud names.
+type DataplaneTraits struct {
+	Initialized                      bool
+	UseVFIOHostDevice                bool   // DPDK PCI / VFIO host-device CNI + OnDelete DaemonSet strategy
+	UseKernelSocketMode              bool   // Kernel socket / xeth mode + routeDomain0MTU + debug sidecar
+	UseVirtioMode                    bool   // Virtio PMD + virtio_eth0_ignore + tmm-init postStart hook
+	UseCalicoVXLANGateway            bool   // Route ServiceCIDR/PodCIDR via Calico VXLAN link-local 169.254.1.1
+	SuppressDefaultRouteOnExternal   bool   // Omit 0.0.0.0/0 F5SPKStaticRoute on external-net (Virtio eth0/eth1 safety)
+	IncludeClusterDNSInTMMResolver   bool   // Include in-cluster kube-dns ClusterIP in F5BigDnsCache forwarders
+	EmitSNATEgressPool               bool   // Emit F5SPKSnatpool alongside F5BigNetopPolicy
+	PreserveHostDeviceIPs            bool   // Set preserve_ip_addresses: true on CNEInstance cniNetworks
+	SkipAdminLoadBalancerService     bool   // Skip creating f5-tmm-LoadBalancer service (e.g. GCP L4 ILB port limits)
+	DisablePSE                       bool   // Set TMM_F5_PSE_DISABLED=true
+	RenderDefaultNamespaceNADs       bool   // Also render NADs in default namespace (Azure Socket)
+	UseShortInfraNetworkNames        bool   // Use "external"/"internal" instead of "external-net"/"internal-net" in Infra CR
+	OmitTMMInterfacesAndSkipNICs     bool   // Omit TMM_INTERFACES and TMM_SKIP_NICS env vars (Azure Socket)
+	ConservativeTMMResourceRequests  bool   // Use 1 CPU / 4Gi requests with 2 CPU / 8Gi limits when unconfigured (Azure)
+	EgressPrefersExternalNetwork     bool   // Keep egressNet on external network even when internal network exists
+	IncludeNodeCIDRInK8sRoutes       bool   // Include NodeCIDR in TMM_K8S_ROUTES and Infra staticRoutes (Virtio)
+	IncludeDefaultInEgressMatchNames bool   // Append "default" to EgressGateway sourceSelector matchNames (Virtio)
+	EmitTMMInitConfigMap             bool   // Emit tmm-init ConfigMap (tmm_init.tcl / user_conf.tcl) alongside Infra
+	UseSplitMultusManifests          bool   // Apply multus/02-multus-*.yaml instead of monolithic daemonset
+	DefaultPalCPUSet                 string // Default PAL_CPU_SET ("0,2" on Azure, "0-1" otherwise)
+	DefaultClusterDNSIP              string // Fallback kube-dns ClusterIP when offline/dry-run
+	DefaultMTU                       int    // Default dataplane MTU when not specified on intent/network
+	DefaultRouteDomain0MTU           int    // Optional routeDomain0MTU override (1390 for kernel socket mode)
+}
+
+// DefaultTraitsForUnderlay returns the canonical DataplaneTraits for the given
+// cloud provider name and DataplaneDriver.
+func DefaultTraitsForUnderlay(cloudName string, driver DataplaneDriver) DataplaneTraits {
+	if driver == "" {
+		switch cloudName {
+		case intent.ProviderAzure:
+			driver = DriverSocket
+		case intent.ProviderGCP:
+			driver = DriverVirtio
+		default:
+			driver = DriverDPDKPCI
+		}
+	}
+
+	isAzure := cloudName == intent.ProviderAzure
+	palCPUSet := "0-1"
+	if isAzure {
+		palCPUSet = "0,2"
+	}
+
+	switch driver {
+	case DriverSocket:
+		return DataplaneTraits{
+			Initialized:                     true,
+			UseKernelSocketMode:             true,
+			IncludeClusterDNSInTMMResolver:  true,
+			EmitSNATEgressPool:              true,
+			DisablePSE:                      true,
+			RenderDefaultNamespaceNADs:      isAzure,
+			UseShortInfraNetworkNames:       isAzure,
+			OmitTMMInterfacesAndSkipNICs:    isAzure,
+			ConservativeTMMResourceRequests: isAzure,
+			EgressPrefersExternalNetwork:    isAzure,
+			DefaultPalCPUSet:                palCPUSet,
+			DefaultClusterDNSIP:             bnkconst.DefaultK8sClusterDNSIP,
+			DefaultMTU:                      bnkconst.DefaultMTU,
+			DefaultRouteDomain0MTU:          bnkconst.DefaultRouteDomain0MTU,
+		}
+	case DriverVirtio:
+		return DataplaneTraits{
+			Initialized:                      true,
+			UseVirtioMode:                    true,
+			UseCalicoVXLANGateway:            true,
+			SuppressDefaultRouteOnExternal:   true,
+			IncludeClusterDNSInTMMResolver:   false,
+			EmitSNATEgressPool:               false,
+			PreserveHostDeviceIPs:            true,
+			SkipAdminLoadBalancerService:     true,
+			EgressPrefersExternalNetwork:     true,
+			IncludeNodeCIDRInK8sRoutes:       true,
+			IncludeDefaultInEgressMatchNames: true,
+			UseSplitMultusManifests:          true,
+			DefaultPalCPUSet:                 palCPUSet,
+			DefaultClusterDNSIP:              bnkconst.DefaultK8sClusterDNSIP,
+			DefaultMTU:                       bnkconst.DefaultGCPMTU,
+		}
+	default: // DriverDPDKPCI
+		dnsIP := bnkconst.DefaultAWSClusterDNSIP
+		if cloudName != "" && cloudName != intent.ProviderAWS {
+			dnsIP = bnkconst.DefaultK8sClusterDNSIP
+		}
+		return DataplaneTraits{
+			Initialized:                     true,
+			UseVFIOHostDevice:               true,
+			IncludeClusterDNSInTMMResolver:  true,
+			EmitSNATEgressPool:              true,
+			RenderDefaultNamespaceNADs:      isAzure,
+			UseShortInfraNetworkNames:       isAzure,
+			OmitTMMInterfacesAndSkipNICs:    isAzure,
+			ConservativeTMMResourceRequests: isAzure,
+			EgressPrefersExternalNetwork:    isAzure,
+			EmitTMMInitConfigMap:            cloudName == intent.ProviderAWS,
+			DefaultPalCPUSet:                palCPUSet,
+			DefaultClusterDNSIP:             dnsIP,
+			DefaultMTU:                      bnkconst.DefaultMTU,
+		}
+	}
+}
 
 // NICAttachment describes how a specific secondary NIC is attached to a dataplane node.
 type NICAttachment struct {
@@ -82,6 +241,7 @@ type UnderlayContext struct {
 	NodeCIDR    string
 
 	DataplaneDriver DataplaneDriver
+	Traits          DataplaneTraits
 	Networks        []NetworkAttachmentSpec
 	StorageClass    string
 	NodeNames       []string
@@ -99,6 +259,18 @@ type UnderlayContext struct {
 	JumphostDialer func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
+// EnsureTraits returns the UnderlayContext's DataplaneTraits, initializing them
+// from CloudName and DataplaneDriver if they were not explicitly populated.
+func (u *UnderlayContext) EnsureTraits() DataplaneTraits {
+	if u == nil {
+		return DefaultTraitsForUnderlay(intent.ProviderAWS, DriverDPDKPCI)
+	}
+	if !u.Traits.Initialized {
+		u.Traits = DefaultTraitsForUnderlay(u.CloudName, u.DataplaneDriver)
+	}
+	return u.Traits
+}
+
 // Provider is the cloud IaaS underlay lifecycle interface implemented by internal/providers/{aws,azure,gcp}.
 type Provider interface {
 	Name() string
@@ -114,7 +286,7 @@ func (u *UnderlayContext) ExternalNetwork() *NetworkAttachmentSpec {
 		return nil
 	}
 	for i := range u.Networks {
-		if u.Networks[i].Role == "external" || u.Networks[i].Name == "external" || u.Networks[i].Name == "external-net" {
+		if u.Networks[i].Role == NetRoleExternal || u.Networks[i].Name == NetRoleExternal || u.Networks[i].Name == NetNameExternal {
 			return &u.Networks[i]
 		}
 	}
@@ -130,7 +302,7 @@ func (u *UnderlayContext) InternalNetwork() *NetworkAttachmentSpec {
 		return nil
 	}
 	for i := range u.Networks {
-		if u.Networks[i].Role == "internal" || u.Networks[i].Name == "internal" || u.Networks[i].Name == "internal-net" {
+		if u.Networks[i].Role == NetRoleInternal || u.Networks[i].Name == NetRoleInternal || u.Networks[i].Name == NetNameInternal {
 			return &u.Networks[i]
 		}
 	}
@@ -152,13 +324,6 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 		cloud = intent.ProviderAWS
 	}
 
-	mtu := 1500
-	if cl.Bnk != nil && cl.Bnk.TmmMtuInt() > 0 {
-		mtu = cl.Bnk.TmmMtuInt()
-	} else if cloud == intent.ProviderGCP {
-		mtu = 1460
-	}
-
 	u := &UnderlayContext{
 		CloudName:                    cloud,
 		ClusterName:                  cl.EffectiveName(),
@@ -169,14 +334,20 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 	switch cloud {
 	case intent.ProviderAWS:
 		u.DataplaneDriver = DriverDPDKPCI
-		u.ServiceCIDR = "172.20.0.0/16"
-		u.PodCIDR = "192.168.0.0/16"
+		u.Traits = DefaultTraitsForUnderlay(cloud, u.DataplaneDriver)
+		u.ServiceCIDR = DefaultAWSServiceCIDR
+		u.PodCIDR = DefaultAWSPodCIDR
 		u.NodeCIDR = cl.Network.VPCCidr
-		u.StorageClass = "gp2"
+		u.StorageClass = DefaultAWSStorageClass
 		u.AdminLoadBalancerAnnotations["service.beta.kubernetes.io/aws-load-balancer-type"] = "nlb"
 		u.AdminLoadBalancerAnnotations["service.beta.kubernetes.io/aws-load-balancer-internal"] = "true"
 
-		extCIDR := "10.90.100.0/24"
+		mtu := u.Traits.DefaultMTU
+		if cl.Bnk != nil && cl.Bnk.TmmMtuInt() > 0 {
+			mtu = cl.Bnk.TmmMtuInt()
+		}
+
+		extCIDR := DefaultAWSExternalSubnetCIDR
 		intCIDR := ""
 		if cl.Network.DataPath != nil {
 			if cl.Network.DataPath.External.CIDR != "" {
@@ -187,161 +358,173 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 			}
 		}
 		extGW := netcalc.GatewayIP(extCIDR)
-		extSelf1 := netcalc.IPAtOffset(extCIDR, 11)
-		extSelf2 := netcalc.IPAtOffset(extCIDR, 12)
-		extFloat := netcalc.IPAtOffset(extCIDR, 10)
+		extSelf1 := netcalc.IPAtOffset(extCIDR, DefaultSelfIP1Offset)
+		extSelf2 := netcalc.IPAtOffset(extCIDR, DefaultSelfIP2Offset)
+		extFloat := netcalc.IPAtOffset(extCIDR, DefaultFloatingIPOffset)
 		extCNI, _ := json.Marshal(map[string]any{
-			"cniVersion": "0.3.1",
-			"name":       "external-net",
+			"cniVersion": CNIVersionDefault,
+			"name":       NetNameExternal,
 			"type":       "host-device",
-			"device":     "eth1",
+			"device":     DefaultLinuxExtNIC,
 		})
 		u.Networks = append(u.Networks, NetworkAttachmentSpec{
-			Name:          "external-net",
-			Role:          "external",
+			Name:          NetNameExternal,
+			Role:          NetRoleExternal,
 			SubnetCIDR:    extCIDR,
 			GatewayIP:     extGW,
 			MTU:           mtu,
 			SelfIPs:       []string{extSelf1 + "/24", extSelf2 + "/24"},
 			FloatingIP:    extFloat + "/24",
 			CNIConfigJSON: string(extCNI),
-			TMMInterface:  "1.1",
+			TMMInterface:  TMMInterfaceDPDKExt,
 		})
 		if intCIDR != "" {
 			intGW := netcalc.GatewayIP(intCIDR)
-			intSelf1 := netcalc.IPAtOffset(intCIDR, 11)
-			intSelf2 := netcalc.IPAtOffset(intCIDR, 12)
-			intFloat := netcalc.IPAtOffset(intCIDR, 10)
+			intSelf1 := netcalc.IPAtOffset(intCIDR, DefaultSelfIP1Offset)
+			intSelf2 := netcalc.IPAtOffset(intCIDR, DefaultSelfIP2Offset)
+			intFloat := netcalc.IPAtOffset(intCIDR, DefaultFloatingIPOffset)
 			intCNI, _ := json.Marshal(map[string]any{
-				"cniVersion": "0.3.1",
-				"name":       "internal-net",
+				"cniVersion": CNIVersionDefault,
+				"name":       NetNameInternal,
 				"type":       "host-device",
-				"device":     "eth2",
+				"device":     DefaultLinuxIntNIC,
 			})
 			u.Networks = append(u.Networks, NetworkAttachmentSpec{
-				Name:          "internal-net",
-				Role:          "internal",
+				Name:          NetNameInternal,
+				Role:          NetRoleInternal,
 				SubnetCIDR:    intCIDR,
 				GatewayIP:     intGW,
 				MTU:           mtu,
 				SelfIPs:       []string{intSelf1 + "/24", intSelf2 + "/24"},
 				FloatingIP:    intFloat + "/24",
 				CNIConfigJSON: string(intCNI),
-				TMMInterface:  "1.2",
+				TMMInterface:  TMMInterfaceDPDKInt,
 			})
 		}
 
 	case intent.ProviderAzure:
 		u.DataplaneDriver = DriverSocket
-		u.ServiceCIDR = "10.240.0.0/16"
-		u.PodCIDR = "10.244.0.0/16"
+		u.Traits = DefaultTraitsForUnderlay(cloud, u.DataplaneDriver)
+		u.ServiceCIDR = DefaultAzureServiceCIDR
+		u.PodCIDR = DefaultAzurePodCIDR
 		u.NodeCIDR = cl.Network.VNetCIDR
-		u.StorageClass = "managed-csi"
+		u.StorageClass = DefaultAzureStorageClass
 		u.AdminLoadBalancerAnnotations["service.beta.kubernetes.io/azure-load-balancer-internal"] = "true"
+
+		mtu := u.Traits.DefaultMTU
+		if cl.Bnk != nil && cl.Bnk.TmmMtuInt() > 0 {
+			mtu = cl.Bnk.TmmMtuInt()
+		}
 
 		extCIDR := cl.Network.Subnets.External
 		if extCIDR == "" {
-			extCIDR = "10.90.3.0/24"
+			extCIDR = DefaultAzureExternalSubnetCIDR
 		}
 		intCIDR := cl.Network.Subnets.Internal
 		if intCIDR == "" && cl.HasInternalInterface() {
-			intCIDR = "10.90.4.0/24"
+			intCIDR = DefaultAzureInternalSubnetCIDR
 		}
 		extGW := netcalc.GatewayIP(extCIDR)
-		extSelf1 := netcalc.IPAtOffset(extCIDR, 11)
-		extSelf2 := netcalc.IPAtOffset(extCIDR, 12)
-		extFloat := netcalc.IPAtOffset(extCIDR, 10)
+		extSelf1 := netcalc.IPAtOffset(extCIDR, DefaultSelfIP1Offset)
+		extSelf2 := netcalc.IPAtOffset(extCIDR, DefaultSelfIP2Offset)
+		extFloat := netcalc.IPAtOffset(extCIDR, DefaultFloatingIPOffset)
 		extCNI, _ := json.Marshal(map[string]any{
-			"cniVersion": "0.3.1",
-			"name":       "external-net",
+			"cniVersion": CNIVersionDefault,
+			"name":       NetNameExternal,
 			"type":       "bridge",
-			"bridge":     "br-ext",
+			"bridge":     DefaultAzureBridgeExt,
 			"isGateway":  true,
 			"ipMasq":     false,
 			"ipam": map[string]any{
 				"type":       "host-local",
 				"subnet":     extCIDR,
-				"rangeStart": netcalc.IPAtOffset(extCIDR, 200),
-				"rangeEnd":   netcalc.IPAtOffset(extCIDR, 250),
+				"rangeStart": netcalc.IPAtOffset(extCIDR, DefaultBridgeIPAMRangeStartOffset),
+				"rangeEnd":   netcalc.IPAtOffset(extCIDR, DefaultBridgeIPAMRangeEndOffset),
 			},
 		})
 		u.Networks = append(u.Networks, NetworkAttachmentSpec{
-			Name:          "external-net",
-			Role:          "external",
+			Name:          NetNameExternal,
+			Role:          NetRoleExternal,
 			SubnetCIDR:    extCIDR,
 			GatewayIP:     extGW,
 			MTU:           mtu,
 			SelfIPs:       []string{extSelf1 + "/24", extSelf2 + "/24"},
 			FloatingIP:    extFloat + "/24",
 			CNIConfigJSON: string(extCNI),
-			TMMInterface:  "0.2",
+			TMMInterface:  TMMInterfaceSocketExt,
 		})
 		if intCIDR != "" {
 			intGW := netcalc.GatewayIP(intCIDR)
-			intSelf1 := netcalc.IPAtOffset(intCIDR, 11)
-			intSelf2 := netcalc.IPAtOffset(intCIDR, 12)
-			intFloat := netcalc.IPAtOffset(intCIDR, 10)
+			intSelf1 := netcalc.IPAtOffset(intCIDR, DefaultSelfIP1Offset)
+			intSelf2 := netcalc.IPAtOffset(intCIDR, DefaultSelfIP2Offset)
+			intFloat := netcalc.IPAtOffset(intCIDR, DefaultFloatingIPOffset)
 			intCNI, _ := json.Marshal(map[string]any{
-				"cniVersion": "0.3.1",
-				"name":       "internal-net",
+				"cniVersion": CNIVersionDefault,
+				"name":       NetNameInternal,
 				"type":       "bridge",
-				"bridge":     "br-int",
+				"bridge":     DefaultAzureBridgeInt,
 				"isGateway":  true,
 				"ipMasq":     false,
 				"ipam": map[string]any{
 					"type":       "host-local",
 					"subnet":     intCIDR,
-					"rangeStart": netcalc.IPAtOffset(intCIDR, 200),
-					"rangeEnd":   netcalc.IPAtOffset(intCIDR, 250),
+					"rangeStart": netcalc.IPAtOffset(intCIDR, DefaultBridgeIPAMRangeStartOffset),
+					"rangeEnd":   netcalc.IPAtOffset(intCIDR, DefaultBridgeIPAMRangeEndOffset),
 				},
 			})
 			u.Networks = append(u.Networks, NetworkAttachmentSpec{
-				Name:          "internal-net",
-				Role:          "internal",
+				Name:          NetNameInternal,
+				Role:          NetRoleInternal,
 				SubnetCIDR:    intCIDR,
 				GatewayIP:     intGW,
 				MTU:           mtu,
 				SelfIPs:       []string{intSelf1 + "/24", intSelf2 + "/24"},
 				FloatingIP:    intFloat + "/24",
 				CNIConfigJSON: string(intCNI),
-				TMMInterface:  "0.3",
+				TMMInterface:  TMMInterfaceSocketInt,
 			})
 		}
 
 	case intent.ProviderGCP:
 		u.DataplaneDriver = DriverVirtio
+		u.Traits = DefaultTraitsForUnderlay(cloud, u.DataplaneDriver)
 		u.ServiceCIDR = cl.Network.Main.SvcsCIDR
 		if u.ServiceCIDR == "" {
-			u.ServiceCIDR = "10.96.0.0/20"
+			u.ServiceCIDR = DefaultGCPServiceCIDR
 		}
 		u.PodCIDR = cl.Network.Main.PodsCIDR
 		if u.PodCIDR == "" {
-			u.PodCIDR = "10.92.0.0/14"
+			u.PodCIDR = DefaultGCPPodCIDR
 		}
 		u.NodeCIDR = cl.Network.Main.CIDR
-		u.StorageClass = "standard-rwo"
+		u.StorageClass = DefaultGCPStorageClass
 		u.AdminLoadBalancerAnnotations["networking.gke.io/load-balancer-type"] = "Internal"
+
+		mtu := u.Traits.DefaultMTU
+		if cl.Bnk != nil && cl.Bnk.TmmMtuInt() > 0 {
+			mtu = cl.Bnk.TmmMtuInt()
+		}
 
 		extCIDR := cl.Network.External.CIDR
 		if extCIDR == "" {
-			extCIDR = "10.90.2.0/24"
+			extCIDR = DefaultGCPExternalSubnetCIDR
 		}
 		intCIDR := cl.Network.Internal.CIDR
 		if intCIDR == "" {
-			intCIDR = "10.90.3.0/24"
+			intCIDR = DefaultGCPInternalSubnetCIDR
 		}
 		extGW := netcalc.GatewayIP(extCIDR)
 		intGW := netcalc.GatewayIP(intCIDR)
-		extSelf1 := netcalc.IPAtOffset(extCIDR, 10)
-		extSelf2 := netcalc.IPAtOffset(extCIDR, 11)
-		intSelf1 := netcalc.IPAtOffset(intCIDR, 10)
-		intSelf2 := netcalc.IPAtOffset(intCIDR, 11)
+		extSelf1 := netcalc.IPAtOffset(extCIDR, DefaultGCPSelfIP1Offset)
+		extSelf2 := netcalc.IPAtOffset(extCIDR, DefaultGCPSelfIP2Offset)
+		intSelf1 := netcalc.IPAtOffset(intCIDR, DefaultGCPSelfIP1Offset)
+		intSelf2 := netcalc.IPAtOffset(intCIDR, DefaultGCPSelfIP2Offset)
 
 		extCNI, _ := json.Marshal(map[string]any{
-			"cniVersion": "0.3.1",
-			"name":       "external-net",
+			"cniVersion": CNIVersionDefault,
+			"name":       NetNameExternal,
 			"type":       "host-device",
-			"device":     "eth1",
+			"device":     DefaultLinuxExtNIC,
 			"ipam": map[string]any{
 				"type": "static",
 				"addresses": []map[string]any{
@@ -350,10 +533,10 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 			},
 		})
 		intCNI, _ := json.Marshal(map[string]any{
-			"cniVersion": "0.3.1",
-			"name":       "internal-net",
+			"cniVersion": CNIVersionDefault,
+			"name":       NetNameInternal,
 			"type":       "host-device",
-			"device":     "eth2",
+			"device":     DefaultLinuxIntNIC,
 			"ipam": map[string]any{
 				"type": "static",
 				"addresses": []map[string]any{
@@ -363,24 +546,24 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 		})
 		u.Networks = []NetworkAttachmentSpec{
 			{
-				Name:          "external-net",
-				Role:          "external",
+				Name:          NetNameExternal,
+				Role:          NetRoleExternal,
 				SubnetCIDR:    extCIDR,
 				GatewayIP:     extGW,
 				MTU:           mtu,
 				SelfIPs:       []string{extSelf1 + "/24", extSelf2 + "/24"},
 				CNIConfigJSON: string(extCNI),
-				TMMInterface:  "1.1",
+				TMMInterface:  TMMInterfaceDPDKExt,
 			},
 			{
-				Name:          "internal-net",
-				Role:          "internal",
+				Name:          NetNameInternal,
+				Role:          NetRoleInternal,
 				SubnetCIDR:    intCIDR,
 				GatewayIP:     intGW,
 				MTU:           mtu,
 				SelfIPs:       []string{intSelf1 + "/24", intSelf2 + "/24"},
 				CNIConfigJSON: string(intCNI),
-				TMMInterface:  "1.2",
+				TMMInterface:  TMMInterfaceDPDKInt,
 			},
 		}
 	default:
