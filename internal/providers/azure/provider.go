@@ -35,11 +35,6 @@ func (p *Provider) Name() string {
 
 func resolveAzureSubscriptionID(cl *intent.Cluster, st *state.State) string {
 	if st != nil {
-		for _, k := range []string{"SUBSCRIPTION_ID", "AZURE_SUBSCRIPTION_ID"} {
-			if v := strings.TrimSpace(st.Get(k)); v != "" && v != "00000000-0000-0000-0000-000000000000" {
-				return v
-			}
-		}
 		for _, k := range []string{"AZURE_RESOURCE_GROUP_ID", "RG_ID", "AZURE_AKS_CLUSTER_ID", "AKS_CLUSTER_ID", "AZURE_VNET_ID", "VNET_ID"} {
 			val := strings.TrimSpace(st.Get(k))
 			if strings.HasPrefix(strings.ToLower(val), "/subscriptions/") {
@@ -53,6 +48,13 @@ func resolveAzureSubscriptionID(cl *intent.Cluster, st *state.State) string {
 	if cl != nil {
 		if v := strings.TrimSpace(cl.Metadata.SubscriptionID); v != "" && v != "00000000-0000-0000-0000-000000000000" {
 			return v
+		}
+	}
+	if st != nil {
+		for _, k := range []string{"SUBSCRIPTION_ID", "AZURE_SUBSCRIPTION_ID"} {
+			if v := strings.TrimSpace(st.Get(k)); v != "" && v != "00000000-0000-0000-0000-000000000000" {
+				return v
+			}
 		}
 	}
 	return ""
@@ -385,20 +387,20 @@ func (p *Provider) attachHooks(u *provider.UnderlayContext, cl *intent.Cluster, 
 		pods, err := k8sClient.CoreV1().Pods(bnkconst.InstanceNamespace).List(ctx, metav1.ListOptions{
 			LabelSelector: "app=f5-tmm",
 		})
-		if err != nil {
-			return nil
-		}
-		for i := range pods.Items {
-			pod := &pods.Items[i]
-			if pod.Labels == nil {
-				pod.Labels = make(map[string]string)
+		if err == nil {
+			for i := range pods.Items {
+				pod := &pods.Items[i]
+				if pod.Labels == nil {
+					pod.Labels = make(map[string]string)
+				}
+				if pod.Labels["f5-traffic"] == "true" {
+					continue
+				}
+				pod.Labels["f5-traffic"] = "true"
+				_, _ = k8sClient.CoreV1().Pods(bnkconst.InstanceNamespace).Update(ctx, pod, metav1.UpdateOptions{})
 			}
-			if pod.Labels["f5-traffic"] == "true" {
-				continue
-			}
-			pod.Labels["f5-traffic"] = "true"
-			_, _ = k8sClient.CoreV1().Pods(bnkconst.InstanceNamespace).Update(ctx, pod, metav1.UpdateOptions{})
 		}
+		_ = Phase29ForgeRegister(ctx, cl, st, p.Clients, dryRun)
 		return nil
 	}
 }

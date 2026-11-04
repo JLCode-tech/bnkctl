@@ -2,6 +2,7 @@ package azure
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -127,6 +128,8 @@ type fakeAKSClient struct {
 	ManagedClustersAPI
 	createdCluster string
 	deletedCluster string
+	deleteCalls    int
+	deleteErrs     []error
 	kubeconfig     []byte
 }
 
@@ -136,6 +139,11 @@ func (f *fakeAKSClient) BeginCreateOrUpdate(ctx context.Context, rg, name string
 }
 
 func (f *fakeAKSClient) BeginDelete(ctx context.Context, rg, name string, opt *armcontainerservice.ManagedClustersClientBeginDeleteOptions) (*runtime.Poller[armcontainerservice.ManagedClustersClientDeleteResponse], error) {
+	idx := f.deleteCalls
+	f.deleteCalls++
+	if idx < len(f.deleteErrs) && f.deleteErrs[idx] != nil {
+		return nil, f.deleteErrs[idx]
+	}
 	f.deletedCluster = name
 	return nil, nil
 }
@@ -154,6 +162,7 @@ type fakeAgentPoolClient struct {
 	AgentPoolsAPI
 	createdPool string
 	deletedPool string
+	deleteErr   error
 }
 
 func (f *fakeAgentPoolClient) BeginCreateOrUpdate(ctx context.Context, rg, clusterName, poolName string, p armcontainerservice.AgentPool, opt *armcontainerservice.AgentPoolsClientBeginCreateOrUpdateOptions) (*runtime.Poller[armcontainerservice.AgentPoolsClientCreateOrUpdateResponse], error) {
@@ -162,6 +171,9 @@ func (f *fakeAgentPoolClient) BeginCreateOrUpdate(ctx context.Context, rg, clust
 }
 
 func (f *fakeAgentPoolClient) BeginDelete(ctx context.Context, rg, clusterName, poolName string, opt *armcontainerservice.AgentPoolsClientBeginDeleteOptions) (*runtime.Poller[armcontainerservice.AgentPoolsClientDeleteResponse], error) {
+	if f.deleteErr != nil {
+		return nil, f.deleteErr
+	}
 	f.deletedPool = poolName
 	return nil, nil
 }
@@ -340,5 +352,42 @@ func TestAzurePhasesDryRunAndLive(t *testing.T) {
 	}
 	if uDisc.KubeconfigPath == "" || string(uDisc.Kubeconfig) != "apiVersion: v1\nkind: Config\n" {
 		t.Fatalf("expected UnderlayContext.Kubeconfig populated in DiscoverUnderlay, got path=%q kc=%q", uDisc.KubeconfigPath, string(uDisc.Kubeconfig))
+	}
+}
+
+func TestPhaseDownClusterRetriesOnRollingUpgradeBlock(t *testing.T) {
+	t.Setenv("AZRBNKCTL_SKIP_AUTH", "0")
+	ctx := context.Background()
+	cl := testAzureClusterIntent()
+	st, err := state.Load(t.TempDir())
+	if err != nil {
+		t.Fatalf("state.Load: %v", err)
+	}
+	st.Set("AZURE_RESOURCE_GROUP", "azrbnkctl-bnk-agentfoundry-demo-rg")
+	st.Set("AZURE_AKS_CLUSTER_NAME", "aks-bnk-agentfoundry-demo")
+
+	aksMock := &fakeAKSClient{
+		deleteErrs: []error{
+			errors.New("ResourceGroupDeletionBlocked: Deletion of resource group 'MC_azrbnkctl-bnk-agentfoundry-demo-rg_aks-bnk-agentfoundry-demo_australiaeast' failed as resources with identifiers 'Microsoft.Compute/virtualMachineScaleSets/aks-system-17066625-vmss' could not be deleted. Virtual Machine Scale Set updates are not allowed while there is a Rolling Upgrade in progress."),
+			nil,
+		},
+	}
+	poolMock := &fakeAgentPoolClient{
+		deleteErr: errors.New("OperationNotAllowed: Cannot run operation because deletion has been initiated on the cluster. Deletion cannot be canceled or rolled back."),
+	}
+	c := &Clients{
+		SubscriptionID:  cl.Metadata.SubscriptionID,
+		AgentPools:      poolMock,
+		ManagedClusters: aksMock,
+	}
+
+	if err := PhaseDownCluster(ctx, c, cl, st); err != nil {
+		t.Fatalf("expected PhaseDownCluster to succeed after retry, got: %v", err)
+	}
+	if aksMock.deleteCalls != 2 {
+		t.Fatalf("expected 2 BeginDelete calls, got %d", aksMock.deleteCalls)
+	}
+	if aksMock.deletedCluster != "aks-bnk-agentfoundry-demo" {
+		t.Fatalf("expected aks-bnk-agentfoundry-demo deleted, got %q", aksMock.deletedCluster)
 	}
 }

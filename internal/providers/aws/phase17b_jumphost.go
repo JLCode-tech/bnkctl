@@ -171,6 +171,14 @@ func waitForEICEState(ctx context.Context, c *Clients, eiceID string, target ec2
 			if target == ec2types.Ec2InstanceConnectEndpointStateDeleteComplete && awsmw.IsNotFound(err) {
 				return nil
 			}
+			if awsmw.IsNotFound(err) && time.Now().Before(deadline) {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(EICEPollInterval):
+					continue
+				}
+			}
 			return fmt.Errorf("DescribeInstanceConnectEndpoints %s: %w", eiceID, err)
 		}
 		if len(out.InstanceConnectEndpoints) == 0 {
@@ -275,6 +283,14 @@ func waitForInstanceState(ctx context.Context, c *Clients, instanceID string, ta
 		if err != nil {
 			if target == ec2types.InstanceStateNameTerminated && awsmw.IsNotFound(err) {
 				return nil
+			}
+			if awsmw.IsNotFound(err) && time.Now().Before(deadline) {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(JumphostPollInterval):
+					continue
+				}
 			}
 			return fmt.Errorf("DescribeInstances %s: %w", instanceID, err)
 		}

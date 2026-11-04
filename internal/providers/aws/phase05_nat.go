@@ -30,6 +30,14 @@ func waitForNATState(ctx context.Context, c *Clients, natID string, target ec2ty
 			if target == ec2types.NatGatewayStateDeleted && awsmw.IsNotFound(err) {
 				return nil
 			}
+			if awsmw.IsNotFound(err) && time.Now().Before(deadline) {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(NATPollInterval):
+					continue
+				}
+			}
 			return fmt.Errorf("DescribeNatGateways %s: %w", natID, err)
 		}
 		if len(out.NatGateways) == 0 {

@@ -1994,3 +1994,102 @@ func TestPhase17bJumphostDown_FallbackIAMRoleAndProfileCleanup(t *testing.T) {
 		t.Errorf("expected fallback IAM role deleted, got %v", iamFake.deletedRoles)
 	}
 }
+
+type eventualConsistencyInstanceEC2 struct {
+	fakePhaseEC2
+	describeCalls int
+}
+
+func (f *eventualConsistencyInstanceEC2) DescribeInstances(_ context.Context, _ *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+	f.describeCalls++
+	if f.describeCalls == 1 {
+		return nil, fmt.Errorf("api error InvalidInstanceID.NotFound: The instance ID 'i-eventual' does not exist")
+	}
+	return &ec2.DescribeInstancesOutput{
+		Reservations: []ec2types.Reservation{
+			{
+				Instances: []ec2types.Instance{
+					{
+						InstanceId: aws.String("i-eventual"),
+						State:      &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
+					},
+				},
+			},
+		},
+	}, nil
+}
+
+func (f *eventualConsistencyInstanceEC2) DescribeNatGateways(_ context.Context, _ *ec2.DescribeNatGatewaysInput, _ ...func(*ec2.Options)) (*ec2.DescribeNatGatewaysOutput, error) {
+	f.describeCalls++
+	if f.describeCalls == 1 {
+		return nil, fmt.Errorf("api error NatGatewayNotFound: The natGateway ID 'nat-eventual' does not exist")
+	}
+	return &ec2.DescribeNatGatewaysOutput{
+		NatGateways: []ec2types.NatGateway{
+			{
+				NatGatewayId: aws.String("nat-eventual"),
+				State:        ec2types.NatGatewayStateAvailable,
+			},
+		},
+	}, nil
+}
+
+func (f *eventualConsistencyInstanceEC2) DescribeInstanceConnectEndpoints(_ context.Context, _ *ec2.DescribeInstanceConnectEndpointsInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstanceConnectEndpointsOutput, error) {
+	f.describeCalls++
+	if f.describeCalls == 1 {
+		return nil, fmt.Errorf("api error InvalidInstanceConnectEndpointId.NotFound: The Instance Connect Endpoint ID 'eice-eventual' does not exist")
+	}
+	return &ec2.DescribeInstanceConnectEndpointsOutput{
+		InstanceConnectEndpoints: []ec2types.Ec2InstanceConnectEndpoint{
+			{
+				InstanceConnectEndpointId: aws.String("eice-eventual"),
+				State:                     ec2types.Ec2InstanceConnectEndpointStateCreateComplete,
+			},
+		},
+	}, nil
+}
+
+func TestWaitForInstanceState_RetriesOnTransientNotFound(t *testing.T) {
+	origPoll := JumphostPollInterval
+	JumphostPollInterval = time.Millisecond
+	defer func() { JumphostPollInterval = origPoll }()
+
+	ec2Fake := &eventualConsistencyInstanceEC2{}
+	clients := &Clients{PhaseEC2: ec2Fake}
+	if err := waitForInstanceState(context.Background(), clients, "i-eventual", ec2types.InstanceStateNameRunning); err != nil {
+		t.Fatalf("waitForInstanceState failed on transient NotFound: %v", err)
+	}
+	if ec2Fake.describeCalls != 2 {
+		t.Fatalf("expected 2 DescribeInstances calls, got %d", ec2Fake.describeCalls)
+	}
+}
+
+func TestWaitForNATState_RetriesOnTransientNotFound(t *testing.T) {
+	origPoll := NATPollInterval
+	NATPollInterval = time.Millisecond
+	defer func() { NATPollInterval = origPoll }()
+
+	ec2Fake := &eventualConsistencyInstanceEC2{}
+	clients := &Clients{PhaseEC2: ec2Fake}
+	if err := waitForNATState(context.Background(), clients, "nat-eventual", ec2types.NatGatewayStateAvailable); err != nil {
+		t.Fatalf("waitForNATState failed on transient NotFound: %v", err)
+	}
+	if ec2Fake.describeCalls != 2 {
+		t.Fatalf("expected 2 DescribeNatGateways calls, got %d", ec2Fake.describeCalls)
+	}
+}
+
+func TestWaitForEICEState_RetriesOnTransientNotFound(t *testing.T) {
+	origPoll := EICEPollInterval
+	EICEPollInterval = time.Millisecond
+	defer func() { EICEPollInterval = origPoll }()
+
+	ec2Fake := &eventualConsistencyInstanceEC2{}
+	clients := &Clients{PhaseEC2: ec2Fake}
+	if err := waitForEICEState(context.Background(), clients, "eice-eventual", ec2types.Ec2InstanceConnectEndpointStateCreateComplete); err != nil {
+		t.Fatalf("waitForEICEState failed on transient NotFound: %v", err)
+	}
+	if ec2Fake.describeCalls != 2 {
+		t.Fatalf("expected 2 DescribeInstanceConnectEndpoints calls, got %d", ec2Fake.describeCalls)
+	}
+}
