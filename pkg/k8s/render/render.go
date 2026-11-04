@@ -503,10 +503,10 @@ func RenderInfra(tmpl []byte, cl *intent.Cluster, hasInternal bool) ([]byte, err
 	}
 	sel := cl.Network.DataPath.SelfIPs
 	if sel.External == "" {
-		return nil, fmt.Errorf("render infra: external self IP not derivable (external subnet must be /24)")
+		return nil, fmt.Errorf("render infra: external self IP not derivable from %q", cl.Network.DataPath.External.CIDR)
 	}
 	if hasInternal && sel.Internal == "" {
-		return nil, fmt.Errorf("render infra: internal self IP not derivable (internal subnet must be /24)")
+		return nil, fmt.Errorf("render infra: internal self IP not derivable from %q", cl.Network.DataPath.Internal.CIDR)
 	}
 	extStart, extEnd, err := intent.SelfIPPoolRange(sel.External)
 	if err != nil {
@@ -521,7 +521,10 @@ func RenderInfra(tmpl []byte, cl *intent.Cluster, hasInternal bool) ([]byte, err
 	start, _ := intent.DeriveSelfIP(cl.Network.DataPath.External.CIDR, infraListenerFirst)
 	end, _ := intent.DeriveSelfIP(cl.Network.DataPath.External.CIDR, infraListenerLast)
 	if start == "" || end == "" {
-		return nil, fmt.Errorf("render infra: listener pool not derivable from external CIDR %q (must be /24)", cl.Network.DataPath.External.CIDR)
+		start, end = defaultListenerRangeFromSubnet(cl.Network.DataPath.External.CIDR, "", "")
+	}
+	if start == "" || end == "" {
+		return nil, fmt.Errorf("render infra: listener pool not derivable from external CIDR %q", cl.Network.DataPath.External.CIDR)
 	}
 	externalNAD := "external-netdevice"
 	if cl.DataplaneBinding() == "sriov" {

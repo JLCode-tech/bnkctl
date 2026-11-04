@@ -689,17 +689,11 @@ func RenderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 
 	listenerStart, listenerEnd := extStart, extEnd
 	if len(ext.SelfIPs) > 0 && strings.Contains(ext.SelfIPs[0], "/") {
-		if ip, ipNet, err := net.ParseCIDR(ext.SelfIPs[0]); err == nil && ipNet != nil {
-			ones, bits := ipNet.Mask.Size()
-			if bits == 32 && ones >= 28 {
-				if v4 := ip.Mask(ipNet.Mask).To4(); v4 != nil {
-					hostCount := byte(1 << (32 - ones))
-					extStart = net.IPv4(v4[0], v4[1], v4[2], v4[3]).String()
-					extEnd = net.IPv4(v4[0], v4[1], v4[2], v4[3]+2).String()
-					listenerStart = net.IPv4(v4[0], v4[1], v4[2], v4[3]+3).String()
-					listenerEnd = net.IPv4(v4[0], v4[1], v4[2], v4[3]+hostCount-2).String()
-				}
-			}
+		if v4, hostCount, ok := parseDelegatedSubPrefix(ext.SelfIPs[0], ext.SubnetCIDR); ok {
+			extStart = net.IPv4(v4[0], v4[1], v4[2], v4[3]).String()
+			extEnd = net.IPv4(v4[0], v4[1], v4[2], v4[3]+2).String()
+			listenerStart = net.IPv4(v4[0], v4[1], v4[2], v4[3]+3).String()
+			listenerEnd = net.IPv4(v4[0], v4[1], v4[2], v4[3]+hostCount-2).String()
 		}
 	}
 	extPool := map[string]any{
@@ -710,12 +704,7 @@ func RenderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 		extPool["availabilityZone"] = az
 	}
 	if listenerStart == extStart && listenerEnd == extEnd {
-		if ip, ipNet, err := net.ParseCIDR(ext.SubnetCIDR); err == nil && ipNet != nil {
-			if v4 := ip.Mask(ipNet.Mask).To4(); v4 != nil {
-				listenerStart = net.IPv4(v4[0], v4[1], v4[2], 100).String()
-				listenerEnd = net.IPv4(v4[0], v4[1], v4[2], 199).String()
-			}
-		}
+		listenerStart, listenerEnd = defaultListenerRangeFromSubnet(ext.SubnetCIDR, listenerStart, listenerEnd)
 	}
 	listenerPool := map[string]any{
 		"rangeStart": listenerStart,
@@ -775,14 +764,9 @@ func RenderUnifiedNetworkAndEgress(cl *intent.Cluster, u *provider.UnderlayConte
 	if intNet != nil {
 		intStart, intEnd, _ := ipRangeFromSelfIPs(intNet.SelfIPs, intNet.SubnetCIDR)
 		if len(intNet.SelfIPs) > 0 && strings.Contains(intNet.SelfIPs[0], "/") {
-			if ip, ipNet, err := net.ParseCIDR(intNet.SelfIPs[0]); err == nil && ipNet != nil {
-				ones, bits := ipNet.Mask.Size()
-				if bits == 32 && ones >= 28 {
-					if v4 := ip.Mask(ipNet.Mask).To4(); v4 != nil {
-						intStart = net.IPv4(v4[0], v4[1], v4[2], v4[3]).String()
-						intEnd = net.IPv4(v4[0], v4[1], v4[2], v4[3]+2).String()
-					}
-				}
+			if v4, _, ok := parseDelegatedSubPrefix(intNet.SelfIPs[0], intNet.SubnetCIDR); ok {
+				intStart = net.IPv4(v4[0], v4[1], v4[2], v4[3]).String()
+				intEnd = net.IPv4(v4[0], v4[1], v4[2], v4[3]+2).String()
 			}
 		}
 		intPool := map[string]any{
@@ -1346,4 +1330,60 @@ func prefixLenFromCIDR(cidr string, fallback int) int {
 		return fallback
 	}
 	return ones
+}
+
+// parseDelegatedSubPrefix checks whether selfIPCIDR represents a delegated /28+ sub-prefix
+// inside a larger subnetCIDR (such as GCP alias IP ranges or AWS secondary prefix blocks),
+// rather than a SelfIP simply carrying the parent subnet's own /28 mask.
+func parseDelegatedSubPrefix(selfIPCIDR, subnetCIDR string) (net.IP, byte, bool) {
+	ip, ipNet, err := net.ParseCIDR(strings.TrimSpace(selfIPCIDR))
+	if err != nil || ipNet == nil {
+		return nil, 0, false
+	}
+	ones, bits := ipNet.Mask.Size()
+	if bits != 32 || ones < 28 || ones > 30 {
+		return nil, 0, false
+	}
+	v4 := ip.Mask(ipNet.Mask).To4()
+	if v4 == nil {
+		return nil, 0, false
+	}
+	if _, subNet, subErr := net.ParseCIDR(strings.TrimSpace(subnetCIDR)); subErr == nil && subNet != nil {
+		subOnes, _ := subNet.Mask.Size()
+		subBase := subNet.IP.Mask(subNet.Mask).To4()
+		if ones <= subOnes || (subBase != nil && v4.Equal(subBase)) {
+			return nil, 0, false
+		}
+	} else if v4[3] == 0 {
+		return nil, 0, false
+	}
+	hostCount := byte(1 << (32 - ones))
+	return v4, hostCount, true
+}
+
+func defaultListenerRangeFromSubnet(subnetCIDR, fallbackStart, fallbackEnd string) (string, string) {
+	ip, ipNet, err := net.ParseCIDR(strings.TrimSpace(subnetCIDR))
+	if err != nil || ipNet == nil {
+		return fallbackStart, fallbackEnd
+	}
+	ones, bits := ipNet.Mask.Size()
+	v4 := ip.Mask(ipNet.Mask).To4()
+	if bits != 32 || v4 == nil {
+		return fallbackStart, fallbackEnd
+	}
+	if ones <= 24 {
+		return net.IPv4(v4[0], v4[1], v4[2], 100).String(), net.IPv4(v4[0], v4[1], v4[2], 199).String()
+	}
+	if ones <= 28 {
+		hostCount := byte(1 << (32 - ones))
+		startOffset := byte(13)
+		if hostCount >= 32 {
+			startOffset = hostCount / 2
+		}
+		endOffset := hostCount - 2
+		if startOffset <= endOffset {
+			return net.IPv4(v4[0], v4[1], v4[2], v4[3]+startOffset).String(), net.IPv4(v4[0], v4[1], v4[2], v4[3]+endOffset).String()
+		}
+	}
+	return fallbackStart, fallbackEnd
 }
