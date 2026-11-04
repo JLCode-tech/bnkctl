@@ -460,28 +460,19 @@ func healTMMK8sRoutes(ctx context.Context, k8sClient kubernetes.Interface, dynCl
 		f.Description = "TMM_K8S_ROUTES and f5-cne-controller env verified"
 		return f
 	}
-	if v, ok := cneHasTMMEnv(cne, render.TMMK8sRoutesEnv); ok {
-		f.Healthy = true
-		f.Description = fmt.Sprintf("%s=%s on CNEInstance %s", render.TMMK8sRoutesEnv, v, cne.GetName())
-		return f
-	}
-	mv, _, _ := unstructured.NestedString(cne.Object, "spec", "manifestVersion")
-	if strings.HasPrefix(mv, "2.3") {
-		f.Healthy = true
-		f.Description = fmt.Sprintf("manifestVersion %s does not require %s", mv, render.TMMK8sRoutesEnv)
-		return f
-	}
-	f.Description = fmt.Sprintf("CNEInstance %s/%s missing %s", ns, cne.GetName(), render.TMMK8sRoutesEnv)
-	if opts.DryRun {
-		return f
-	}
+
 	var routes []string
+	var podCIDR string
 	if opts.Underlay != nil {
 		if opts.Underlay.ServiceCIDR != "" {
 			routes = append(routes, opts.Underlay.ServiceCIDR)
 		}
 		if opts.Underlay.PodCIDR != "" {
+			podCIDR = opts.Underlay.PodCIDR
 			routes = append(routes, opts.Underlay.PodCIDR)
+		}
+		if opts.Underlay.DataplaneDriver == provider.DriverVirtio && opts.Underlay.NodeCIDR != "" {
+			routes = append(routes, opts.Underlay.NodeCIDR)
 		}
 	}
 	if len(routes) == 0 && opts.Cluster != nil {
@@ -490,9 +481,31 @@ func healTMMK8sRoutes(ctx context.Context, k8sClient kubernetes.Interface, dynCl
 				routes = append(routes, u.ServiceCIDR)
 			}
 			if u.PodCIDR != "" {
+				podCIDR = u.PodCIDR
 				routes = append(routes, u.PodCIDR)
 			}
+			if u.DataplaneDriver == provider.DriverVirtio && u.NodeCIDR != "" {
+				routes = append(routes, u.NodeCIDR)
+			}
 		}
+	}
+
+	if v, ok := cneHasTMMEnv(cne, render.TMMK8sRoutesEnv); ok {
+		if podCIDR == "" || strings.Contains(v, podCIDR) {
+			f.Healthy = true
+			f.Description = fmt.Sprintf("%s=%s on CNEInstance %s", render.TMMK8sRoutesEnv, v, cne.GetName())
+			return f
+		}
+	}
+	mv, _, _ := unstructured.NestedString(cne.Object, "spec", "manifestVersion")
+	if strings.HasPrefix(mv, "2.3") {
+		f.Healthy = true
+		f.Description = fmt.Sprintf("manifestVersion %s does not require %s", mv, render.TMMK8sRoutesEnv)
+		return f
+	}
+	f.Description = fmt.Sprintf("CNEInstance %s/%s missing or incomplete %s", ns, cne.GetName(), render.TMMK8sRoutesEnv)
+	if opts.DryRun {
+		return f
 	}
 	if len(routes) == 0 {
 		f.Healthy = true
@@ -500,15 +513,34 @@ func healTMMK8sRoutes(ctx context.Context, k8sClient kubernetes.Interface, dynCl
 		return f
 	}
 	val := strings.Join(routes, ",")
+	upsertEnv := func(env []any) []any {
+		found := false
+		var out []any
+		for _, item := range env {
+			m, ok := item.(map[string]any)
+			if ok && m["name"] == render.TMMK8sRoutesEnv {
+				if !found {
+					out = append(out, map[string]any{"name": render.TMMK8sRoutesEnv, "value": val})
+					found = true
+				}
+			} else {
+				out = append(out, item)
+			}
+		}
+		if !found {
+			out = append(out, map[string]any{"name": render.TMMK8sRoutesEnv, "value": val})
+		}
+		return out
+	}
 	var patch string
 	if _, hasTopTMM, _ := unstructured.NestedMap(cne.Object, "spec", "tmm"); hasTopTMM {
 		env, _, _ := unstructured.NestedSlice(cne.Object, "spec", "tmm", "env")
-		env = append(env, map[string]any{"name": render.TMMK8sRoutesEnv, "value": val})
+		env = upsertEnv(env)
 		envBytes, _ := json.Marshal(env)
 		patch = fmt.Sprintf(`{"spec":{"tmm":{"env":%s}}}`, string(envBytes))
 	} else {
 		env, _, _ := unstructured.NestedSlice(cne.Object, "spec", "advanced", "tmm", "env")
-		env = append(env, map[string]any{"name": render.TMMK8sRoutesEnv, "value": val})
+		env = upsertEnv(env)
 		envBytes, _ := json.Marshal(env)
 		patch = fmt.Sprintf(`{"spec":{"advanced":{"tmm":{"env":%s}}}}`, string(envBytes))
 	}

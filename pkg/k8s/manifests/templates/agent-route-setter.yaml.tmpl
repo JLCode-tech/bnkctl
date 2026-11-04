@@ -56,6 +56,13 @@ spec:
           while :; do
             nsenter -t 1 -m -u -n -i -- ip rule add to 10.86.0.0/14 lookup main pref 765 2>/dev/null || true
             nsenter -t 1 -m -u -n -i -- ip rule add to 10.87.0.0/20 lookup main pref 766 2>/dev/null || true
+{{- if .MainPodsCidr }}
+            nsenter -t 1 -m -u -n -i -- ip rule add to "$want_cidr" lookup main pref 764 2>/dev/null || true
+            nsenter -t 1 -m -u -n -i -- ip rule add to '{{ .MainPodsCidr }}' lookup main pref 767 2>/dev/null || true
+{{- end }}
+{{- if .MainSvcsCidr }}
+            nsenter -t 1 -m -u -n -i -- ip rule add to '{{ .MainSvcsCidr }}' lookup main pref 768 2>/dev/null || true
+{{- end }}
             have=$(nsenter -t 1 -m -u -n -i -- ip route show "$want_cidr" 2>/dev/null || echo '')
             case "$have" in
               *"via $want_gw"*"dev $want_dev"*) ;;

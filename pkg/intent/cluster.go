@@ -716,10 +716,30 @@ func (f *ForgeSpec) ResolveProjectName(workspaceName string) string {
 	if f != nil && f.ProjectName != "" {
 		return f.ProjectName
 	}
-	if workspaceName == "" {
-		return "bnkctl"
+	prefix := "bnkctl"
+	if f != nil {
+		switch strings.ToLower(strings.TrimSpace(f.CloudProvider)) {
+		case "azure":
+			prefix = "azrbnkctl"
+		case "gcp", "gke":
+			prefix = "gkebnkctl"
+		case "aws", "eks":
+			prefix = "awsbnkctl"
+		default:
+			switch strings.ToLower(strings.TrimSpace(f.ProjectType)) {
+			case "cloud-azure":
+				prefix = "azrbnkctl"
+			case "cloud-gcp", "cloud-gke":
+				prefix = "gkebnkctl"
+			case "cloud-aws", "cloud-eks":
+				prefix = "awsbnkctl"
+			}
+		}
 	}
-	return "bnkctl-" + workspaceName
+	if workspaceName == "" {
+		return prefix
+	}
+	return prefix + "-" + workspaceName
 }
 
 // Derived holds computed names and IP endpoints derived from cluster.yaml (Azure + shared).
@@ -2054,14 +2074,26 @@ func (c *Cluster) deriveAzure(baseDir string) error {
 			if filepath.IsAbs(c.Bnk.FARArchive) || baseDir == "" {
 				c.Derived.FARArchiveFullPath = c.Bnk.FARArchive
 			} else {
-				c.Derived.FARArchiveFullPath = filepath.Join(baseDir, c.Bnk.FARArchive)
+				cand := filepath.Join(baseDir, c.Bnk.FARArchive)
+				if _, err := os.Stat(cand); err != nil {
+					if _, cwdErr := os.Stat(c.Bnk.FARArchive); cwdErr == nil {
+						cand = c.Bnk.FARArchive
+					}
+				}
+				c.Derived.FARArchiveFullPath = cand
 			}
 		}
 		if c.Bnk.JWT != "" {
 			if filepath.IsAbs(c.Bnk.JWT) || baseDir == "" {
 				c.Derived.JWTFullPath = c.Bnk.JWT
 			} else {
-				c.Derived.JWTFullPath = filepath.Join(baseDir, c.Bnk.JWT)
+				cand := filepath.Join(baseDir, c.Bnk.JWT)
+				if _, err := os.Stat(cand); err != nil {
+					if _, cwdErr := os.Stat(c.Bnk.JWT); cwdErr == nil {
+						cand = c.Bnk.JWT
+					}
+				}
+				c.Derived.JWTFullPath = cand
 			}
 		}
 	}

@@ -28,11 +28,13 @@ import (
 	"github.com/JLCode-tech/bnkctl/pkg/k8s"
 	"github.com/JLCode-tech/bnkctl/pkg/provider"
 	"gopkg.in/yaml.v3"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
@@ -486,21 +488,26 @@ func SyncCPCLKeySecret(ctx context.Context, k8sClient kubernetes.Interface, jwks
 	if err != nil {
 		return err
 	}
-	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      bnkconst.CPCLKeySecretName,
-			Namespace: bnkconst.InstanceNamespace,
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{
-			"jwks.json": body,
-		},
+	for _, ns := range []string{bnkconst.UtilsNamespace, bnkconst.NamespaceCneCore, bnkconst.InstanceNamespace} {
+		sec := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      bnkconst.CPCLKeySecretName,
+				Namespace: ns,
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"jwks.json": body,
+			},
+		}
+		_, err = k8sClient.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{})
+		if apierrors.IsAlreadyExists(err) {
+			_, err = k8sClient.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{})
+		}
+		if err != nil {
+			return err
+		}
 	}
-	_, err = k8sClient.CoreV1().Secrets(bnkconst.InstanceNamespace).Create(ctx, sec, metav1.CreateOptions{})
-	if apierrors.IsAlreadyExists(err) {
-		_, err = k8sClient.CoreV1().Secrets(bnkconst.InstanceNamespace).Update(ctx, sec, metav1.UpdateOptions{})
-	}
-	return err
+	return nil
 }
 
 // ApplyLicenseWithQuotaRetry applies the License CR YAML, clearing any blocking f5-single-license-quota
@@ -523,11 +530,32 @@ func ApplyLicenseWithQuotaRetry(ctx context.Context, k8sClient kubernetes.Interf
 }
 
 // PhaseLicense purges stale CPCL secrets, applies the License CRs (with f5-single-license-quota retry),
-// and optionally syncs cpcl-key-secret from CWC's JWKS endpoint.
+// and optionally syncs cpcl-key-secret from CWC's JWKS endpoint or cpcl-key-cm ConfigMap.
 func PhaseLicense(ctx context.Context, k8sClient kubernetes.Interface, applyFn ApplyYAMLFunc, licenseYAML []byte, jwksEndpoint string) error {
 	_ = PurgeStaleCPCLSecrets(ctx, k8sClient)
 	if err := ApplyLicenseWithQuotaRetry(ctx, k8sClient, applyFn, licenseYAML); err != nil {
 		return fmt.Errorf("apply License: %w", err)
+	}
+	if k8sClient != nil {
+		if cm, err := k8sClient.CoreV1().ConfigMaps(bnkconst.NamespaceCneCore).Get(ctx, "cpcl-key-cm", metav1.GetOptions{}); err == nil && cm != nil {
+			if jwtKey := cm.Data["jwt.key"]; jwtKey != "" {
+				for _, ns := range []string{bnkconst.UtilsNamespace, bnkconst.NamespaceCneCore, bnkconst.InstanceNamespace} {
+					sec := &corev1.Secret{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      bnkconst.CPCLKeySecretName,
+							Namespace: ns,
+						},
+						Type: corev1.SecretTypeOpaque,
+						Data: map[string][]byte{
+							"jwt.key": []byte(jwtKey),
+						},
+					}
+					if _, cErr := k8sClient.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); apierrors.IsAlreadyExists(cErr) {
+						_, _ = k8sClient.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{})
+					}
+				}
+			}
+		}
 	}
 	if jwksEndpoint != "" {
 		_ = SyncCPCLKeySecret(ctx, k8sClient, jwksEndpoint)
@@ -651,4 +679,48 @@ func CheckCNEInstanceActivation(ctx context.Context, k8sClient kubernetes.Interf
 		}
 	}
 	return st, nil
+}
+
+const tmmTerminatingStuckThreshold = 45 * time.Second
+
+// CycleStuckTMMPods ensures DaemonSet/f5-tmm uses RollingUpdate (MaxSurge=0, MaxUnavailable=1)
+// and force-deletes (grace=0) any app=f5-tmm pod stuck in Terminating for >= 45s so single-node
+// TMM rollouts release host-device / PCIe NICs cleanly.
+func CycleStuckTMMPods(ctx context.Context, k8sClient kubernetes.Interface) {
+	if k8sClient == nil {
+		return
+	}
+	if ds, err := k8sClient.AppsV1().DaemonSets(bnkconst.InstanceNamespace).Get(ctx, bnkconst.DaemonSetTMM, metav1.GetOptions{}); err == nil && ds != nil {
+		if ds.Spec.UpdateStrategy.Type != appsv1.RollingUpdateDaemonSetStrategyType ||
+			ds.Spec.UpdateStrategy.RollingUpdate == nil ||
+			ds.Spec.UpdateStrategy.RollingUpdate.MaxSurge == nil ||
+			ds.Spec.UpdateStrategy.RollingUpdate.MaxSurge.IntVal != 0 ||
+			ds.Spec.UpdateStrategy.RollingUpdate.MaxUnavailable == nil ||
+			ds.Spec.UpdateStrategy.RollingUpdate.MaxUnavailable.IntVal != 1 {
+			maxSurge := intstr.FromInt32(0)
+			maxUnavailable := intstr.FromInt32(1)
+			ds.Spec.UpdateStrategy = appsv1.DaemonSetUpdateStrategy{
+				Type: appsv1.RollingUpdateDaemonSetStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateDaemonSet{
+					MaxSurge:       &maxSurge,
+					MaxUnavailable: &maxUnavailable,
+				},
+			}
+			_, _ = k8sClient.AppsV1().DaemonSets(bnkconst.InstanceNamespace).Update(ctx, ds, metav1.UpdateOptions{})
+		}
+	}
+	pods, err := k8sClient.CoreV1().Pods(bnkconst.InstanceNamespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=f5-tmm",
+	})
+	if err != nil || pods == nil {
+		return
+	}
+	grace := int64(0)
+	for _, p := range pods.Items {
+		if p.DeletionTimestamp != nil && time.Since(p.DeletionTimestamp.Time) >= tmmTerminatingStuckThreshold {
+			_ = k8sClient.CoreV1().Pods(bnkconst.InstanceNamespace).Delete(ctx, p.Name, metav1.DeleteOptions{
+				GracePeriodSeconds: &grace,
+			})
+		}
+	}
 }

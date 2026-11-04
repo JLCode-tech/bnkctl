@@ -1,6 +1,7 @@
 # BNK 2.4 Supplemental Gateway & Inference CRDs omitted by crd-installer 2.4.0-3.2882.0.
-# Installed idempotently via server-side apply during Phase36FLO.
-# Serves both v1 (storage) and v1alpha1 so both non-GA (2.4.0-3.2882.0) and GA manifests work seamlessly.
+# Installed idempotently during Phase36FLO when not yet present on the cluster.
+# Serves both v1alpha1 (storage) and v1 so crd-installer on BNK 2.4.1+ can upgrade
+# the CRD schema in-place without a status.storedVersions conflict.
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
@@ -14,18 +15,18 @@ spec:
     singular: gatewaysetting
   scope: Namespaced
   versions:
-    - name: v1
+    - name: v1alpha1
       served: true
-      storage: false
+      storage: true
       subresources:
         status: {}
       schema:
         openAPIV3Schema:
           type: object
           x-kubernetes-preserve-unknown-fields: true
-    - name: v1alpha1
+    - name: v1
       served: true
-      storage: true
+      storage: false
       subresources:
         status: {}
       schema:
@@ -46,18 +47,18 @@ spec:
     singular: egressgateway
   scope: Namespaced
   versions:
-    - name: v1
+    - name: v1alpha1
       served: true
-      storage: false
+      storage: true
       subresources:
         status: {}
       schema:
         openAPIV3Schema:
           type: object
           x-kubernetes-preserve-unknown-fields: true
-    - name: v1alpha1
+    - name: v1
       served: true
-      storage: true
+      storage: false
       subresources:
         status: {}
       schema:
@@ -78,6 +79,15 @@ spec:
     singular: infra
   scope: Namespaced
   versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
     - name: v1
       served: true
       storage: false
@@ -87,9 +97,96 @@ spec:
         openAPIV3Schema:
           type: object
           x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: l2networks.gateway.k8s.f5.com
+spec:
+  group: gateway.k8s.f5.com
+  names:
+    kind: L2Network
+    listKind: L2NetworkList
+    plural: l2networks
+    singular: l2network
+  scope: Namespaced
+  versions:
     - name: v1alpha1
       served: true
       storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+    - name: v1
+      served: true
+      storage: false
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: l3networks.gateway.k8s.f5.com
+spec:
+  group: gateway.k8s.f5.com
+  names:
+    kind: L3Network
+    listKind: L3NetworkList
+    plural: l3networks
+    singular: l3network
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+    - name: v1
+      served: true
+      storage: false
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: backends.gateway.k8s.f5.com
+spec:
+  group: gateway.k8s.f5.com
+  names:
+    kind: Backend
+    listKind: BackendList
+    plural: backends
+    singular: backend
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+    - name: v1
+      served: true
+      storage: false
       subresources:
         status: {}
       schema:
@@ -110,18 +207,18 @@ spec:
     singular: l4route
   scope: Namespaced
   versions:
-    - name: v1
+    - name: v1alpha1
       served: true
-      storage: false
+      storage: true
       subresources:
         status: {}
       schema:
         openAPIV3Schema:
           type: object
           x-kubernetes-preserve-unknown-fields: true
-    - name: v1alpha1
+    - name: v1
       served: true
-      storage: true
+      storage: false
       subresources:
         status: {}
       schema:
@@ -142,18 +239,18 @@ spec:
     singular: netpolicy
   scope: Namespaced
   versions:
-    - name: v1
+    - name: v1alpha1
       served: true
-      storage: false
+      storage: true
       subresources:
         status: {}
       schema:
         openAPIV3Schema:
           type: object
           x-kubernetes-preserve-unknown-fields: true
-    - name: v1alpha1
+    - name: v1
       served: true
-      storage: true
+      storage: false
       subresources:
         status: {}
       schema:
@@ -174,18 +271,18 @@ spec:
     singular: secpolicy
   scope: Namespaced
   versions:
-    - name: v1
+    - name: v1alpha1
       served: true
-      storage: false
+      storage: true
       subresources:
         status: {}
       schema:
         openAPIV3Schema:
           type: object
           x-kubernetes-preserve-unknown-fields: true
-    - name: v1alpha1
+    - name: v1
       served: true
-      storage: true
+      storage: false
       subresources:
         status: {}
       schema:
@@ -206,18 +303,18 @@ spec:
     singular: f5epp
   scope: Namespaced
   versions:
-    - name: v1
+    - name: v1alpha1
       served: true
-      storage: false
+      storage: true
       subresources:
         status: {}
       schema:
         openAPIV3Schema:
           type: object
           x-kubernetes-preserve-unknown-fields: true
-    - name: v1alpha1
+    - name: v1
       served: true
-      storage: true
+      storage: false
       subresources:
         status: {}
       schema:

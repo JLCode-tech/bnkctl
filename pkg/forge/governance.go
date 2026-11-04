@@ -41,6 +41,12 @@ func (g GovernanceOverviewResponse) Summary() string {
 	if len(g.Organizations) > orgsCount {
 		orgsCount = len(g.Organizations)
 	}
+	keysCount := 0
+	for _, vk := range g.VirtualKeys {
+		if st, _ := vk["status"].(string); !strings.EqualFold(st, "revoked") {
+			keysCount++
+		}
+	}
 	return fmt.Sprintf(
 		"available=%v ns=%s tenants=%d providers=%d models=%d routes=%d orgs=%d teams=%d principals=%d keys=%d checks=%d nodes=%d edges=%d",
 		g.Available,
@@ -52,7 +58,7 @@ func (g GovernanceOverviewResponse) Summary() string {
 		orgsCount,
 		len(g.Teams),
 		len(g.Principals),
-		len(g.VirtualKeys),
+		keysCount,
 		len(g.ReadinessChecks),
 		len(g.TopologyNodes),
 		len(g.TopologyEdges),

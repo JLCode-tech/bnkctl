@@ -1473,15 +1473,38 @@ func newForgeCmd(flags *GlobalFlags) *cobra.Command {
 					TokensPerMinute:   bootTPM,
 				}, creds)
 			}
-			keyRes, err := forge.GovernanceCreateVirtualKey(cmd.Context(), effRESTURL, cid, forge.GovernanceVirtualKeyCreateRequest{
-				Tenant:           bootTenant,
-				PrincipalID:      principalID,
-				Name:             bootKeyName,
-				AllowedModels:    allowedModels,
-				RPMLimit:         bootRPM,
-				TPMLimit:         bootTPM,
-				MonthlyBudgetUSD: bootBudget,
-			}, creds)
+			var existingActiveKeyID string
+			if ov, ovErr := forge.GovernanceOverview(cmd.Context(), effRESTURL, cid, creds); ovErr == nil {
+				for _, vk := range ov.VirtualKeys {
+					vkName, _ := vk["name"].(string)
+					vkPrinID, _ := vk["principal_id"].(string)
+					vkPrinName, _ := vk["principal_name"].(string)
+					vkStatus, _ := vk["status"].(string)
+					vkID, _ := vk["id"].(string)
+					if vkID != "" && !strings.EqualFold(vkStatus, "revoked") && vkName == bootKeyName && (vkPrinID == principalID || vkPrinName == bootPrincipalID) {
+						if existingActiveKeyID == "" {
+							existingActiveKeyID = vkID
+						} else {
+							_, _ = forge.GovernanceRevokeVirtualKey(cmd.Context(), effRESTURL, cid, vkID, creds)
+						}
+					}
+				}
+			}
+			var keyRes forge.GovernanceVirtualKeyCreateResponse
+			if existingActiveKeyID != "" {
+				keyRes, err = forge.GovernanceRotateVirtualKey(cmd.Context(), effRESTURL, cid, existingActiveKeyID, creds)
+			}
+			if existingActiveKeyID == "" || err != nil {
+				keyRes, err = forge.GovernanceCreateVirtualKey(cmd.Context(), effRESTURL, cid, forge.GovernanceVirtualKeyCreateRequest{
+					Tenant:           bootTenant,
+					PrincipalID:      principalID,
+					Name:             bootKeyName,
+					AllowedModels:    allowedModels,
+					RPMLimit:         bootRPM,
+					TPMLimit:         bootTPM,
+					MonthlyBudgetUSD: bootBudget,
+				}, creds)
+			}
 			if err != nil {
 				return fmt.Errorf("create virtual key: %w", err)
 			}

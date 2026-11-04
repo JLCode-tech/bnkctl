@@ -7,18 +7,23 @@ spec:
   ipams:
   - name: external-selfip
     ipPools:
-    - rangeStart: "{{ .ExtSelfIP }}"
-      rangeEnd: "{{ .ExtSelfIP }}"
+    - rangeStart: "{{ .ExtSelfStart }}"
+      rangeEnd: "{{ .ExtSelfEnd }}"
 {{- if .IntSelfIP }}
   - name: internal-selfip
     ipPools:
-    - rangeStart: "{{ .IntSelfIP }}"
-      rangeEnd: "{{ .IntSelfIP }}"
+    - rangeStart: "{{ .IntSelfStart }}"
+      rangeEnd: "{{ .IntSelfEnd }}"
 {{- end }}
   - name: listener-pool
     ipPools:
+{{- if .AliasListenerStart }}
+    - rangeStart: "{{ .AliasListenerStart }}"
+      rangeEnd: "{{ .AliasListenerEnd }}"
+{{- else }}
     - rangeStart: "{{ .ListenerStart }}"
       rangeEnd: "{{ .ListenerEnd }}"
+{{- end }}
   networkAttachments:
   - name: external-attach
     networkAttachmentDefinitions:
@@ -51,19 +56,55 @@ spec:
 {{- end }}
   egressDefaults:
     networkRef:
-      name: {{ if .IntSelfIP }}internal{{ else }}external{{ end }}
-    port: 4789
+      name: external
+    port: {{ if .VxlanPort }}{{ .VxlanPort }}{{ else }}4789{{ end }}
     subnet: 192.168.0.0/16
   staticRoutes:
+  - name: route-ext-gw
+    destinations:
+    - "{{ .ExtGwIP }}/32"
+    networkRef:
+      name: external
+{{- if .AgentExtIP }}
+  - name: route-agent-node
+    destinations:
+    - "{{ .AgentExtIP }}/32"
+    nextHop: {{ .TmmPodGW }}
+{{- end }}
+{{- if .MainCidr }}
+  - name: route-mgmt-nodes
+    destinations:
+    - "{{ .MainCidr }}"
+    nextHop: {{ .TmmPodGW }}
+{{- end }}
   - name: route-cluster-pods
     destinations:
-    - "{{ .PodCidrDest }}/{{ .PodCidrPrefix }}"
-    nextHop: {{ if .IntGwIP }}{{ .IntGwIP }}{{ else }}{{ .ExtGwIP }}{{ end }}
+    - "{{ .MainPodsDest }}/{{ .MainPodsPrefixLen }}"
+    nextHop: {{ .TmmPodGW }}
   - name: route-cluster-svcs
     destinations:
-    - "{{ .ServiceCidrDest }}/{{ .ServiceCidrPrefix }}"
-    nextHop: {{ if .IntGwIP }}{{ .IntGwIP }}{{ else }}{{ .ExtGwIP }}{{ end }}
+    - "{{ .MainSvcsDest }}/{{ .MainSvcsPrefixLen }}"
+    nextHop: {{ .TmmPodGW }}
   - name: route-default-egress
     destinations:
     - "0.0.0.0/0"
-    nextHop: {{ if .IntGwIP }}{{ .IntGwIP }}{{ else }}{{ .ExtGwIP }}{{ end }}
+    nextHop: {{ .ExtGwIP }}
+---
+apiVersion: k8s.f5net.com/v1
+kind: F5BigDnsCache
+metadata:
+  name: aigw-dns-resolver
+  namespace: f5-cne-system
+spec:
+  cacheType: net-resolver
+  netResolver:
+    useIpv4: true
+    useIpv6: false
+    forwardZones:
+      - forwardZone: "."
+        nameServers:
+          - ipAddress: 8.8.8.8
+            port: 53
+          - ipAddress: 1.1.1.1
+            port: 53
+
