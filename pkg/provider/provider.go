@@ -9,12 +9,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
+	"strings"
 
 	"github.com/JLCode-tech/bnkctl/pkg/bnkconst"
 	"github.com/JLCode-tech/bnkctl/pkg/intent"
 	"github.com/JLCode-tech/bnkctl/pkg/jumphost"
 	"github.com/JLCode-tech/bnkctl/pkg/netcalc"
 	"github.com/JLCode-tech/bnkctl/pkg/state"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -34,8 +37,10 @@ const (
 	DefaultLinuxIntNIC    = "eth2"
 	DefaultAWSLinuxExtNIC = "ens8"
 	DefaultAWSLinuxIntNIC = "ens7"
-	DefaultAWSExtPCIBDF   = "0000:28:00.0"
-	DefaultAWSIntPCIBDF   = "0000:29:00.0"
+	DefaultAWSExtPCIBDF   = "0000:00:08.0"
+	DefaultAWSIntPCIBDF   = "0000:00:07.0"
+	DefaultGCPExtPCIBDF   = "0000:00:05.0"
+	DefaultGCPIntPCIBDF   = "0000:00:06.0"
 	DefaultAzureBridgeExt = "br-ext"
 	DefaultAzureBridgeInt = "br-int"
 
@@ -107,6 +112,9 @@ type DataplaneTraits struct {
 	UseSplitMultusManifests          bool   // Apply multus/02-multus-*.yaml instead of monolithic daemonset
 	DefaultPalCPUSet                 string // Default PAL_CPU_SET ("0,2" on Azure, "0-1" otherwise)
 	DefaultClusterDNSIP              string // Fallback kube-dns ClusterIP when offline/dry-run
+	DefaultPodCIDR                   string // Fallback Pod CIDR for Infra egressDefaults.subnet when PodCIDR is unset
+	DefaultExtPCIBDF                 string // Default PCI BDF address for external dataplane NIC
+	DefaultIntPCIBDF                 string // Default PCI BDF address for internal dataplane NIC
 	DefaultMTU                       int    // Default dataplane MTU when not specified on intent/network
 	DefaultRouteDomain0MTU           int    // Optional routeDomain0MTU override (1390 for kernel socket mode)
 }
@@ -133,6 +141,10 @@ func DefaultTraitsForUnderlay(cloudName string, driver DataplaneDriver) Dataplan
 
 	switch driver {
 	case DriverSocket:
+		dnsIP := bnkconst.DefaultK8sClusterDNSIP
+		if isAzure {
+			dnsIP = bnkconst.DefaultAzureClusterDNSIP
+		}
 		return DataplaneTraits{
 			Initialized:                     true,
 			UseKernelSocketMode:             true,
@@ -145,7 +157,8 @@ func DefaultTraitsForUnderlay(cloudName string, driver DataplaneDriver) Dataplan
 			ConservativeTMMResourceRequests: isAzure,
 			EgressPrefersExternalNetwork:    isAzure,
 			DefaultPalCPUSet:                palCPUSet,
-			DefaultClusterDNSIP:             bnkconst.DefaultK8sClusterDNSIP,
+			DefaultClusterDNSIP:             dnsIP,
+			DefaultPodCIDR:                  DefaultAzurePodCIDR,
 			DefaultMTU:                      bnkconst.DefaultMTU,
 			DefaultRouteDomain0MTU:          bnkconst.DefaultRouteDomain0MTU,
 		}
@@ -165,11 +178,16 @@ func DefaultTraitsForUnderlay(cloudName string, driver DataplaneDriver) Dataplan
 			UseSplitMultusManifests:          true,
 			DefaultPalCPUSet:                 palCPUSet,
 			DefaultClusterDNSIP:              bnkconst.DefaultK8sClusterDNSIP,
+			DefaultPodCIDR:                   DefaultGCPPodCIDR,
+			DefaultExtPCIBDF:                 DefaultGCPExtPCIBDF,
+			DefaultIntPCIBDF:                 DefaultGCPIntPCIBDF,
 			DefaultMTU:                       bnkconst.DefaultGCPMTU,
 		}
 	default: // DriverDPDKPCI
 		dnsIP := bnkconst.DefaultAWSClusterDNSIP
-		if cloudName != "" && cloudName != intent.ProviderAWS {
+		if isAzure {
+			dnsIP = bnkconst.DefaultAzureClusterDNSIP
+		} else if cloudName != "" && cloudName != intent.ProviderAWS {
 			dnsIP = bnkconst.DefaultK8sClusterDNSIP
 		}
 		return DataplaneTraits{
@@ -185,6 +203,9 @@ func DefaultTraitsForUnderlay(cloudName string, driver DataplaneDriver) Dataplan
 			EmitTMMInitConfigMap:            cloudName == intent.ProviderAWS,
 			DefaultPalCPUSet:                palCPUSet,
 			DefaultClusterDNSIP:             dnsIP,
+			DefaultPodCIDR:                  DefaultAWSPodCIDR,
+			DefaultExtPCIBDF:                DefaultAWSExtPCIBDF,
+			DefaultIntPCIBDF:                DefaultAWSIntPCIBDF,
 			DefaultMTU:                      bnkconst.DefaultMTU,
 		}
 	}
@@ -361,6 +382,7 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 		extSelf1 := netcalc.IPAtOffset(extCIDR, DefaultSelfIP1Offset)
 		extSelf2 := netcalc.IPAtOffset(extCIDR, DefaultSelfIP2Offset)
 		extFloat := netcalc.IPAtOffset(extCIDR, DefaultFloatingIPOffset)
+		extSuffix := SubnetPrefixSuffix(extCIDR, "/24")
 		extCNI, _ := json.Marshal(map[string]any{
 			"cniVersion": CNIVersionDefault,
 			"name":       NetNameExternal,
@@ -373,8 +395,8 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 			SubnetCIDR:    extCIDR,
 			GatewayIP:     extGW,
 			MTU:           mtu,
-			SelfIPs:       []string{extSelf1 + "/24", extSelf2 + "/24"},
-			FloatingIP:    extFloat + "/24",
+			SelfIPs:       []string{extSelf1 + extSuffix, extSelf2 + extSuffix},
+			FloatingIP:    extFloat + extSuffix,
 			CNIConfigJSON: string(extCNI),
 			TMMInterface:  TMMInterfaceDPDKExt,
 		})
@@ -383,6 +405,7 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 			intSelf1 := netcalc.IPAtOffset(intCIDR, DefaultSelfIP1Offset)
 			intSelf2 := netcalc.IPAtOffset(intCIDR, DefaultSelfIP2Offset)
 			intFloat := netcalc.IPAtOffset(intCIDR, DefaultFloatingIPOffset)
+			intSuffix := SubnetPrefixSuffix(intCIDR, "/24")
 			intCNI, _ := json.Marshal(map[string]any{
 				"cniVersion": CNIVersionDefault,
 				"name":       NetNameInternal,
@@ -395,8 +418,8 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 				SubnetCIDR:    intCIDR,
 				GatewayIP:     intGW,
 				MTU:           mtu,
-				SelfIPs:       []string{intSelf1 + "/24", intSelf2 + "/24"},
-				FloatingIP:    intFloat + "/24",
+				SelfIPs:       []string{intSelf1 + intSuffix, intSelf2 + intSuffix},
+				FloatingIP:    intFloat + intSuffix,
 				CNIConfigJSON: string(intCNI),
 				TMMInterface:  TMMInterfaceDPDKInt,
 			})
@@ -428,6 +451,7 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 		extSelf1 := netcalc.IPAtOffset(extCIDR, DefaultSelfIP1Offset)
 		extSelf2 := netcalc.IPAtOffset(extCIDR, DefaultSelfIP2Offset)
 		extFloat := netcalc.IPAtOffset(extCIDR, DefaultFloatingIPOffset)
+		extSuffix := SubnetPrefixSuffix(extCIDR, "/24")
 		extCNI, _ := json.Marshal(map[string]any{
 			"cniVersion": CNIVersionDefault,
 			"name":       NetNameExternal,
@@ -448,8 +472,8 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 			SubnetCIDR:    extCIDR,
 			GatewayIP:     extGW,
 			MTU:           mtu,
-			SelfIPs:       []string{extSelf1 + "/24", extSelf2 + "/24"},
-			FloatingIP:    extFloat + "/24",
+			SelfIPs:       []string{extSelf1 + extSuffix, extSelf2 + extSuffix},
+			FloatingIP:    extFloat + extSuffix,
 			CNIConfigJSON: string(extCNI),
 			TMMInterface:  TMMInterfaceSocketExt,
 		})
@@ -458,6 +482,7 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 			intSelf1 := netcalc.IPAtOffset(intCIDR, DefaultSelfIP1Offset)
 			intSelf2 := netcalc.IPAtOffset(intCIDR, DefaultSelfIP2Offset)
 			intFloat := netcalc.IPAtOffset(intCIDR, DefaultFloatingIPOffset)
+			intSuffix := SubnetPrefixSuffix(intCIDR, "/24")
 			intCNI, _ := json.Marshal(map[string]any{
 				"cniVersion": CNIVersionDefault,
 				"name":       NetNameInternal,
@@ -478,8 +503,8 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 				SubnetCIDR:    intCIDR,
 				GatewayIP:     intGW,
 				MTU:           mtu,
-				SelfIPs:       []string{intSelf1 + "/24", intSelf2 + "/24"},
-				FloatingIP:    intFloat + "/24",
+				SelfIPs:       []string{intSelf1 + intSuffix, intSelf2 + intSuffix},
+				FloatingIP:    intFloat + intSuffix,
 				CNIConfigJSON: string(intCNI),
 				TMMInterface:  TMMInterfaceSocketInt,
 			})
@@ -519,6 +544,8 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 		extSelf2 := netcalc.IPAtOffset(extCIDR, DefaultGCPSelfIP2Offset)
 		intSelf1 := netcalc.IPAtOffset(intCIDR, DefaultGCPSelfIP1Offset)
 		intSelf2 := netcalc.IPAtOffset(intCIDR, DefaultGCPSelfIP2Offset)
+		extSuffix := SubnetPrefixSuffix(extCIDR, "/24")
+		intSuffix := SubnetPrefixSuffix(intCIDR, "/24")
 
 		extCNI, _ := json.Marshal(map[string]any{
 			"cniVersion": CNIVersionDefault,
@@ -551,7 +578,7 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 				SubnetCIDR:    extCIDR,
 				GatewayIP:     extGW,
 				MTU:           mtu,
-				SelfIPs:       []string{extSelf1 + "/24", extSelf2 + "/24"},
+				SelfIPs:       []string{extSelf1 + extSuffix, extSelf2 + extSuffix},
 				CNIConfigJSON: string(extCNI),
 				TMMInterface:  TMMInterfaceDPDKExt,
 			},
@@ -561,7 +588,7 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 				SubnetCIDR:    intCIDR,
 				GatewayIP:     intGW,
 				MTU:           mtu,
-				SelfIPs:       []string{intSelf1 + "/24", intSelf2 + "/24"},
+				SelfIPs:       []string{intSelf1 + intSuffix, intSelf2 + intSuffix},
 				CNIConfigJSON: string(intCNI),
 				TMMInterface:  TMMInterfaceDPDKInt,
 			},
@@ -571,4 +598,98 @@ func BuildUnderlayFromIntent(cl *intent.Cluster) (*UnderlayContext, error) {
 	}
 
 	return u, nil
+}
+
+// SubnetPrefixSuffix returns the "/<prefix>" suffix from subnetCIDR (e.g. "/24", "/20", "/28"),
+// falling back to fallback (or "/24" when fallback is empty) if subnetCIDR does not contain a mask.
+func SubnetPrefixSuffix(subnetCIDR, fallback string) string {
+	if fallback == "" {
+		fallback = "/24"
+	}
+	if _, ipNet, err := net.ParseCIDR(strings.TrimSpace(subnetCIDR)); err == nil && ipNet != nil {
+		if ones, _ := ipNet.Mask.Size(); ones > 0 {
+			return fmt.Sprintf("/%d", ones)
+		}
+	}
+	if idx := strings.Index(subnetCIDR, "/"); idx >= 0 && idx < len(subnetCIDR)-1 {
+		return strings.TrimSpace(subnetCIDR[idx:])
+	}
+	return fallback
+}
+
+// ShouldIncludeIPAMAvailabilityZone reports whether IPAM pool entries in the BNK 2.4+
+// Infra CR should include an availabilityZone field, based on the controller environment.
+func ShouldIncludeIPAMAvailabilityZone(controllerEnv map[string]string) bool {
+	if len(controllerEnv) == 0 {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(controllerEnv["PLATFORM_TYPE"]), intent.ProviderAWS)
+}
+
+// HydrateUnderlayFromState populates common UnderlayContext fields (KubeconfigPath,
+// Kubeconfig bytes, ServiceCIDR, and PodCIDR) from workspace state.env.
+func HydrateUnderlayFromState(u *UnderlayContext, st *state.State) {
+	if u == nil || st == nil {
+		return
+	}
+	kcPath := st.Get("KUBECONFIG")
+	if kcPath == "" {
+		kcPath = st.Get("KUBECONFIG_PATH")
+		if kcPath != "" {
+			st.Set("KUBECONFIG", kcPath)
+		}
+	}
+	if kcPath != "" {
+		if _, err := os.Stat(kcPath); err != nil {
+			if candidate := st.KubeconfigPath(); candidate != "" {
+				kcPath = candidate
+			}
+		}
+	} else if candidate := st.KubeconfigPath(); candidate != "" {
+		if _, err := os.Stat(candidate); err == nil {
+			kcPath = candidate
+			st.Set("KUBECONFIG", kcPath)
+		}
+	}
+	if kcPath != "" {
+		u.KubeconfigPath = kcPath
+		// #nosec G304 -- kubeconfig path comes from workspace state.env
+		if raw, err := os.ReadFile(kcPath); err == nil {
+			u.Kubeconfig = raw
+		}
+	}
+	if svcCIDR := st.Get("SERVICE_CIDR"); svcCIDR != "" {
+		u.ServiceCIDR = svcCIDR
+	}
+	if podCIDR := st.Get("POD_CIDR"); podCIDR != "" {
+		u.PodCIDR = podCIDR
+	}
+}
+
+// LabelTMMPodsForTraffic ensures all running TMM pods (app=f5-tmm) in the target
+// namespace carry the f5-traffic=true label required by BNK service selectors.
+func LabelTMMPodsForTraffic(ctx context.Context, k8sClient kubernetes.Interface, namespace string) {
+	if k8sClient == nil {
+		return
+	}
+	if strings.TrimSpace(namespace) == "" {
+		namespace = bnkconst.InstanceNamespace
+	}
+	pods, err := k8sClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=f5-tmm",
+	})
+	if err != nil {
+		return
+	}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if pod.Labels == nil {
+			pod.Labels = make(map[string]string)
+		}
+		if pod.Labels["f5-traffic"] == "true" {
+			continue
+		}
+		pod.Labels["f5-traffic"] = "true"
+		_, _ = k8sClient.CoreV1().Pods(namespace).Update(ctx, pod, metav1.UpdateOptions{})
+	}
 }

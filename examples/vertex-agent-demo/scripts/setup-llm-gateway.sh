@@ -172,16 +172,8 @@ cleanup() {
 trap cleanup EXIT
 
 CNE_POD="$(kubectl get pods -n "${BNK_NS}" --no-headers 2>/dev/null | awk '/cne-controller/{print $1; exit}')"
-ADMIN_PASS=""
-for _ in $(seq 1 15); do
-  ADMIN_PASS="$(kubectl get secret "aitenant-${TENANT}-admin" -n "${BNK_NS}" -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || true)"
-  [ -n "${ADMIN_PASS}" ] && break
-  sleep 2
-done
-CH_PASS="$(kubectl get secret f5-aigateway-clickhouse-auth -n "${BNK_NS}" -o jsonpath='{.data.otel-password}' 2>/dev/null | base64 -d 2>/dev/null || true)"
-if [ -z "${CH_PASS}" ]; then
-  CH_PASS="$(kubectl get secret f5-aigateway-clickhouse-auth -n "${BNK_NS}" -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || true)"
-fi
+ADMIN_PASS="$(bnk_get_aitenant_admin_password "${BNK_NS}" "${TENANT}")"
+CH_PASS="$(bnk_get_clickhouse_password "${BNK_NS}")"
 
 if [ -n "${CNE_POD}" ] && [ -n "${ADMIN_PASS}" ]; then
   kubectl port-forward -n "${BNK_NS}" "svc/f5-cne-controller-api" 18443:8443 >/dev/null 2>&1 &
@@ -502,6 +494,10 @@ if proj_id:
     except Exception as e:
         print(f"  Forge scan note: {e}")
 PY
+fi
+
+if declare -F bnk_ensure_toda_fluentd_stdout >/dev/null 2>&1; then
+  bnk_ensure_toda_fluentd_stdout "f5-cne-core"
 fi
 
 echo "================================================================="
