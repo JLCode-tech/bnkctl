@@ -319,19 +319,19 @@ func (p *Provider) attachHooks(u *provider.UnderlayContext, cl *intent.Cluster, 
 			names = append(names, node.Name)
 			nics := []provider.NICAttachment{
 				{
-					NetworkName:  "external-nad",
+					NetworkName:  provider.NetNameExternal,
 					NICIndex:     1,
-					LinuxIfName:  "eth1",
-					TMMInterface: "0.2",
+					LinuxIfName:  provider.DefaultLinuxExtNIC,
+					TMMInterface: provider.TMMInterfaceSocketExt,
 					Driver:       provider.DriverSocket,
 				},
 			}
 			if u.InternalNetwork() != nil {
 				nics = append(nics, provider.NICAttachment{
-					NetworkName:  "internal-nad",
+					NetworkName:  provider.NetNameInternal,
 					NICIndex:     2,
-					LinuxIfName:  "eth2",
-					TMMInterface: "0.3",
+					LinuxIfName:  provider.DefaultLinuxIntNIC,
+					TMMInterface: provider.TMMInterfaceSocketInt,
 					Driver:       provider.DriverSocket,
 				})
 			}

@@ -363,19 +363,19 @@ func (p *Provider) attachHooks(u *provider.UnderlayContext, cl *intent.Cluster, 
 			names = append(names, node.Name)
 			nics := []provider.NICAttachment{
 				{
-					NetworkName:  "external-nad",
+					NetworkName:  provider.NetNameExternal,
 					NICIndex:     1,
-					LinuxIfName:  "eth1",
-					TMMInterface: "1.1",
+					LinuxIfName:  provider.DefaultLinuxExtNIC,
+					TMMInterface: provider.TMMInterfaceDPDKExt,
 					Driver:       provider.DriverVirtio,
 				},
 			}
 			if u.InternalNetwork() != nil {
 				nics = append(nics, provider.NICAttachment{
-					NetworkName:  "internal-nad",
+					NetworkName:  provider.NetNameInternal,
 					NICIndex:     2,
-					LinuxIfName:  "eth2",
-					TMMInterface: "1.2",
+					LinuxIfName:  provider.DefaultLinuxIntNIC,
+					TMMInterface: provider.TMMInterfaceDPDKInt,
 					Driver:       provider.DriverVirtio,
 				})
 			}
@@ -487,23 +487,25 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 		extIf = strings.TrimSpace(st.Get("EXT_IFACE"))
 	}
 	if extIf == "" {
-		extIf = "eth1"
+		extIf = provider.DefaultLinuxExtNIC
 	}
 	if extSelfIP != "" && len(u.Networks) > 0 {
-		addr := extSelfIP
-		if !strings.Contains(addr, "/") {
-			addr += "/28"
+		selfCIDR := extSelfIP
+		cniAddr := extSelfIP
+		if !strings.Contains(extSelfIP, "/") {
+			selfCIDR = extSelfIP + subnetPrefixSuffix(u.Networks[0].SubnetCIDR, "/24")
+			cniAddr = extSelfIP + "/28"
 		}
-		u.Networks[0].SelfIPs = []string{addr}
+		u.Networks[0].SelfIPs = []string{selfCIDR}
 		extCNI, _ := json.Marshal(map[string]any{
-			"cniVersion": "0.3.1",
-			"name":       "external-net",
+			"cniVersion": provider.CNIVersionDefault,
+			"name":       provider.NetNameExternal,
 			"type":       "host-device",
 			"device":     extIf,
 			"ipam": map[string]any{
 				"type": "static",
 				"addresses": []map[string]any{
-					{"address": addr},
+					{"address": cniAddr},
 				},
 			},
 		})
@@ -516,23 +518,25 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 		intIf = strings.TrimSpace(st.Get("INT_IFACE"))
 	}
 	if intIf == "" {
-		intIf = "eth2"
+		intIf = provider.DefaultLinuxIntNIC
 	}
 	if intSelfIP != "" && len(u.Networks) > 1 {
-		addr := intSelfIP
-		if !strings.Contains(addr, "/") {
-			addr += "/28"
+		selfCIDR := intSelfIP
+		cniAddr := intSelfIP
+		if !strings.Contains(intSelfIP, "/") {
+			selfCIDR = intSelfIP + subnetPrefixSuffix(u.Networks[1].SubnetCIDR, "/24")
+			cniAddr = intSelfIP + "/28"
 		}
-		u.Networks[1].SelfIPs = []string{addr}
+		u.Networks[1].SelfIPs = []string{selfCIDR}
 		intCNI, _ := json.Marshal(map[string]any{
-			"cniVersion": "0.3.1",
-			"name":       "internal-net",
+			"cniVersion": provider.CNIVersionDefault,
+			"name":       provider.NetNameInternal,
 			"type":       "host-device",
 			"device":     intIf,
 			"ipam": map[string]any{
 				"type": "static",
 				"addresses": []map[string]any{
-					{"address": addr},
+					{"address": cniAddr},
 				},
 			},
 		})
@@ -551,31 +555,31 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 			names = append(names, nodeName)
 			extIf := st.Get("EXT_IFACE_" + idx)
 			if extIf == "" {
-				extIf = "eth1"
+				extIf = provider.DefaultLinuxExtNIC
 			}
 			nics := []provider.NICAttachment{
 				{
-					NetworkName:  "external-nad",
+					NetworkName:  provider.NetNameExternal,
 					NICIndex:     1,
 					MACAddress:   st.Get("EXT_MAC_" + idx),
 					PCIAddress:   st.Get("EXT_PCI_" + idx),
 					LinuxIfName:  extIf,
-					TMMInterface: "1.1",
+					TMMInterface: provider.TMMInterfaceDPDKExt,
 					Driver:       provider.DriverVirtio,
 				},
 			}
 			if intIP := st.Get("INT_IP_" + idx); intIP != "" {
 				intIf := st.Get("INT_IFACE_" + idx)
 				if intIf == "" {
-					intIf = "eth2"
+					intIf = provider.DefaultLinuxIntNIC
 				}
 				nics = append(nics, provider.NICAttachment{
-					NetworkName:  "internal-nad",
+					NetworkName:  provider.NetNameInternal,
 					NICIndex:     2,
 					MACAddress:   st.Get("INT_MAC_" + idx),
 					PCIAddress:   st.Get("INT_PCI_" + idx),
 					LinuxIfName:  intIf,
-					TMMInterface: "1.2",
+					TMMInterface: provider.TMMInterfaceDPDKInt,
 					Driver:       provider.DriverVirtio,
 				})
 			}
@@ -599,7 +603,7 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 				extIf = st.Get("TMM_EXT_IFACE")
 			}
 			if extIf == "" {
-				extIf = "eth1"
+				extIf = provider.DefaultLinuxExtNIC
 			}
 			extPCI := st.Get("EXT_PCI")
 			if extPCI == "" {
@@ -607,12 +611,12 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 			}
 			nics := []provider.NICAttachment{
 				{
-					NetworkName:  "external-nad",
+					NetworkName:  provider.NetNameExternal,
 					NICIndex:     1,
 					MACAddress:   st.Get("EXT_MAC"),
 					PCIAddress:   extPCI,
 					LinuxIfName:  extIf,
-					TMMInterface: "1.1",
+					TMMInterface: provider.TMMInterfaceDPDKExt,
 					Driver:       provider.DriverVirtio,
 				},
 			}
@@ -622,19 +626,19 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 					intIf = st.Get("TMM_INT_IFACE")
 				}
 				if intIf == "" {
-					intIf = "eth2"
+					intIf = provider.DefaultLinuxIntNIC
 				}
 				intPCI := st.Get("INT_PCI")
 				if intPCI == "" {
 					intPCI = st.Get("TMM_INT_PCI")
 				}
 				nics = append(nics, provider.NICAttachment{
-					NetworkName:  "internal-nad",
+					NetworkName:  provider.NetNameInternal,
 					NICIndex:     2,
 					MACAddress:   st.Get("INT_MAC"),
 					PCIAddress:   intPCI,
 					LinuxIfName:  intIf,
-					TMMInterface: "1.2",
+					TMMInterface: provider.TMMInterfaceDPDKInt,
 					Driver:       provider.DriverVirtio,
 				})
 			}
@@ -647,4 +651,11 @@ func (p *Provider) hydrateFromState(u *provider.UnderlayContext, st *state.State
 			}
 		}
 	}
+}
+
+func subnetPrefixSuffix(subnetCIDR, fallback string) string {
+	if idx := strings.Index(subnetCIDR, "/"); idx >= 0 {
+		return subnetCIDR[idx:]
+	}
+	return fallback
 }

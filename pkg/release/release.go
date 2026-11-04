@@ -143,6 +143,17 @@ func IsCatalogued(version string) bool {
 	return ok
 }
 
+// DefaultFLOChartVersion returns the FLO Helm chart version for the default BNK
+// release in releases.yaml.
+func DefaultFLOChartVersion() string {
+	if cat, err := loadCatalog(); err == nil {
+		if prof, ok := cat[bnk.DefaultManifestVersion]; ok && prof.FLOChartVersion != "" {
+			return prof.FLOChartVersion
+		}
+	}
+	return "v2.30.0-0.11.4"
+}
+
 // Resolve builds the ReleaseProfile for the requested BNK version.
 //
 // Resolution order:

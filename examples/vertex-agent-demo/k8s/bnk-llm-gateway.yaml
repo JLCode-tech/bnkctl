@@ -277,7 +277,7 @@ spec:
 ---
 # ------------------------------------------------------------------------------
 # Step 5: TMM DNS Resolver in f5-cne-system (F5BigDnsCache/aigw-dns-resolver)
-# Forwards root zone ("") queries to cluster DNS and 8.8.8.8 / 1.1.1.1
+# Forwards root zone (".") queries to 8.8.8.8 / 1.1.1.1 over external Cloud NAT
 # ------------------------------------------------------------------------------
 apiVersion: k8s.f5net.com/v1
 kind: F5BigDnsCache
@@ -294,8 +294,6 @@ spec:
     forwardZones:
       - forwardZone: "."
         nameServers:
-          - ipAddress: 169.254.169.254
-            port: 53
           - ipAddress: 8.8.8.8
             port: 53
           - ipAddress: 1.1.1.1

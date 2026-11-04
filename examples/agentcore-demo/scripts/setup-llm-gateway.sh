@@ -9,6 +9,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEMO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${DEMO_DIR}/../.." && pwd)"
 
+if [ -f "${REPO_ROOT}/examples/common/bnk-aigw-lib.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${REPO_ROOT}/examples/common/bnk-aigw-lib.sh"
+fi
+
 CLUSTER="${CLUSTER:-bnk-agentcore-demo}"
 CFG="${CFG:-${DEMO_DIR}/cluster.yaml}"
 BNK_NS="${BNK_NS:-f5-cne-system}"
@@ -72,8 +77,12 @@ echo " F5 BNK 2.4.1 LLM Gateway Setup — ${CLUSTER} (AWS EKS)"
 echo "================================================================="
 
 # Steps 1-5: Apply 7-Step BNK 2.4.1 LLM Gateway Manifests in f5-cne-system
-KUBE_DNS_IP="$(kubectl get svc kube-dns -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
-KUBE_DNS_IP="${KUBE_DNS_IP:-172.20.0.10}"
+if declare -F bnk_discover_cluster_dns_ip >/dev/null 2>&1; then
+  KUBE_DNS_IP="$(bnk_discover_cluster_dns_ip "172.20.0.10")"
+else
+  KUBE_DNS_IP="$(kubectl get svc kube-dns -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
+  KUBE_DNS_IP="${KUBE_DNS_IP:-172.20.0.10}"
+fi
 echo "[Steps 1-5] Applying AITenant, AICredential, AIProvider, AIModel, 4-Object Route Bundle (Gateway/HTTPRoute/AIGatewayProfile/AppPolicy) & F5BigDnsCache (${KUBE_DNS_IP})..."
 sed \
   -e "s|replace-with-bedrock-primary-api-key|${BEDROCK_PRIMARY_API_KEY}|g" \
@@ -260,12 +269,20 @@ if [ -n "${CNE_POD}" ]; then
   fi
 fi
 
-# Sync governance hierarchy to BNK Forge if reachable and awsbnkctl is built
+# Sync governance hierarchy to BNK Forge if reachable and bnkctl (or awsbnkctl) is built
 FORGE_URL="${FORGE_URL:-http://localhost:8000}"
-if [ -x "${REPO_ROOT}/awsbnkctl" ] && curl -sS -m 3 -o /dev/null "${FORGE_URL}/api/auth/login" 2>/dev/null; then
+BNKCTL_BIN=""
+if declare -F bnk_find_cli >/dev/null 2>&1; then
+  BNKCTL_BIN="$(bnk_find_cli "${REPO_ROOT}" || true)"
+elif [ -x "${REPO_ROOT}/bnkctl" ]; then
+  BNKCTL_BIN="${REPO_ROOT}/bnkctl"
+elif [ -x "${REPO_ROOT}/awsbnkctl" ]; then
+  BNKCTL_BIN="${REPO_ROOT}/awsbnkctl"
+fi
+if [ -n "${BNKCTL_BIN}" ] && curl -sS -m 3 -o /dev/null "${FORGE_URL}/api/auth/login" 2>/dev/null; then
   echo "Syncing DSSM Governance hierarchy (3 organizations, 4 teams, 5 principals) to BNK Forge..."
-  if [ ! -f "${REPO_ROOT}/.awsbnkctl/${CLUSTER}/forge_link.json" ]; then
-    "${REPO_ROOT}/awsbnkctl" forge register --config "${CFG}" >/dev/null 2>&1 || true
+  if [ ! -f "${REPO_ROOT}/.awsbnkctl/${CLUSTER}/forge_link.json" ] && [ ! -f "${REPO_ROOT}/.bnkctl/state/${CLUSTER}/forge_link.json" ]; then
+    "${BNKCTL_BIN}" forge register --config "${CFG}" >/dev/null 2>&1 || true
   fi
   for spec in \
     "f5-agentcore-org|agentcore-platform-team|finance-agent-v2|finance-agent-v2-vk|500.0" \
@@ -275,17 +292,19 @@ if [ -x "${REPO_ROOT}/awsbnkctl" ] && curl -sS -m 3 -o /dev/null "${FORGE_URL}/a
     "sydney-retail-banking|wealth-advisory-ai|portfolio-copilot-agent|portfolio-copilot-prod-vk|800.0"
   do
     IFS='|' read -r f_org f_team f_prin f_vk f_budget <<< "${spec}"
-    "${REPO_ROOT}/awsbnkctl" forge governance bootstrap --config "${CFG}" \
+    "${BNKCTL_BIN}" forge governance bootstrap --config "${CFG}" \
       --tenant "${TENANT}" --org "${f_org}" --team "${f_team}" \
       --principal "${f_prin}" --key-name "${f_vk}" \
       --budget-usd "${f_budget}" --rpm-limit 60 --tpm-limit 120000 >/dev/null 2>&1 || true
   done
-  "${REPO_ROOT}/awsbnkctl" forge governance remediate restart_controller --config "${CFG}" -n "${BNK_NS}" >/dev/null 2>&1 || true
+  "${BNKCTL_BIN}" forge governance remediate restart_controller --config "${CFG}" -n "${BNK_NS}" >/dev/null 2>&1 || true
 fi
 
 # Ensure f5-toda-fluentd-custom retains stdout.conf alongside aigw-hsl.pipeline
 # (f5-lifecycle-operator overwrites f5-toda-fluentd-custom when AI Gateway HSL is reconciled)
-if kubectl get configmap f5-toda-fluentd-custom -n f5-cne-core >/dev/null 2>&1; then
+if declare -F bnk_ensure_toda_fluentd_stdout >/dev/null 2>&1; then
+  bnk_ensure_toda_fluentd_stdout "f5-cne-core"
+elif kubectl get configmap f5-toda-fluentd-custom -n f5-cne-core >/dev/null 2>&1; then
   HAS_STDOUT="$(kubectl get configmap f5-toda-fluentd-custom -n f5-cne-core -o jsonpath='{.data.stdout\.conf}' 2>/dev/null || true)"
   if [ -z "${HAS_STDOUT}" ]; then
     echo "Restoring stdout.conf in f5-cne-core/f5-toda-fluentd-custom for bnkgov-collector -> Loki streaming..."

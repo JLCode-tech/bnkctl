@@ -685,14 +685,16 @@ func renderEmbeddedTemplate(path string, data interface{}) ([]byte, error) {
 }
 
 func normalizeDeploymentSize(s string) string {
-	switch strings.ToLower(s) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "tiny":
+		return "Tiny"
 	case "small":
 		return "Small"
 	case "medium":
 		return "Medium"
 	case "large":
 		return "Large"
-	case "max":
+	case "max", "xlarge", "xxlarge":
 		return "Max"
 	default:
 		if s == "" {
