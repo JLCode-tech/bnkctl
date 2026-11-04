@@ -2,6 +2,14 @@
 
 All notable changes to `bnkctl` are documented in this file.
 
+## [2.7.1](https://github.com/JLCode-tech/bnkctl/compare/v2.7.0...v2.7.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **overlay:** resolve post-v2.7.0 multi-cloud trait and underlay parity gaps ([5c76b47](https://github.com/JLCode-tech/bnkctl/commit/5c76b47d9a597c91a07065ad4e5f4b452b95c364))
+* **overlay:** resolve post-v2.7.0 multi-cloud trait and underlay parity gaps ([#13](https://github.com/JLCode-tech/bnkctl/issues/13)) ([77d37ff](https://github.com/JLCode-tech/bnkctl/commit/77d37ff81ac03099c326b31e2942952ec1a38549))
+
 ## [2.7.0](https://github.com/JLCode-tech/bnkctl/compare/v2.6.0...v2.7.0) (2026-11-04)
 
 
