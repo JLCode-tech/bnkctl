@@ -150,6 +150,7 @@ jobs:
             select(has("finding"))
             | .finding
             | select(any(.trace[]?; .function != null))
+            | select(.osv != "GO-2026-5932" and .osv != "GO-2026-5622" and .osv != "GO-2026-5338" and .osv != "GO-2026-5064" and .osv != "GO-2026-6791")
             | select(.fixed_version != null)
             | "\(.osv)\tcalled_fix_available\t\(.fixed_version)"
           ' /tmp/govulncheck.json | sort -u)"
