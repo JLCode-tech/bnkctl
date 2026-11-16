@@ -156,8 +156,9 @@ You can validate any `cluster.yaml` and preview the full underlay + BNK overlay 
 ./bin/bnkctl heal -c examples/agentcore-demo/cluster.yaml
 ./bin/bnkctl bnk resync -c examples/agentcore-demo/cluster.yaml
 
-# Verify BNK Forge registration & F5 BNK AI Service Plane governance readiness
+# Verify BNK Forge registration, re-scan cluster health, & inspect AI Service Plane governance
 ./bin/bnkctl forge status -c examples/agentcore-demo/cluster.yaml
+./bin/bnkctl forge register --rescan -c examples/agentcore-demo/cluster.yaml
 ./bin/bnkctl forge governance overview -c examples/agentcore-demo/cluster.yaml
 
 # Run validation scenarios (L4 TCP/UDP, gRPC, HTTP routing, Egress SNAT, AI Token Counting)
@@ -183,7 +184,7 @@ You can validate any `cluster.yaml` and preview the full underlay + BNK overlay 
 | `bnkctl upgrade` | Upgrade BNK overlay in-place within the same architectural release train |
 | `bnkctl migrate` | Migrate BNK overlay across architectural release boundaries (e.g., `2.3.x legacy-spk` -> `2.4.x/future gateway-infra`) |
 | `bnkctl bnk {status,scan,heal,resync,upgrade,migrate}` | Granular BNK overlay inspection, MCP endpoint scanning, and pool-member resynchronization |
-| `bnkctl forge {register,unregister,status,governance}` | Register/unregister clusters with [BNK Forge](https://github.com/JLCode-tech/bnk-forge) and manage Multi-Cluster F5 BNK AI Service Plane governance |
+| `bnkctl forge {register,unregister,status,governance}` | Register/rescan (`--rescan`/`--force`, `--credential-template`, `--server-url`) or unregister (`--purge`) clusters across AWS, Azure, GCP, OpenShift, and On-Prem with [BNK Forge](https://github.com/JLCode-tech/bnk-forge) and manage Multi-Cluster F5 BNK AI Service Plane governance |
 | `bnkctl scenarios {list,show,run}` | List, inspect, and execute 15 built-in BNK L4/L7, egress, and GenAI validation scenarios |
 | `bnkctl test {connectivity,dns}` | Execute TCP/UDP VIP connectivity and DNS probes from the cluster jumphost or probe pod |
 | `bnkctl genai parse` | Parse `aiperf` benchmark artifacts into structured [BNK Forge](https://github.com/JLCode-tech/bnk-forge) GenAI telemetry |

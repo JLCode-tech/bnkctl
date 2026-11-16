@@ -36,7 +36,7 @@ type GlobalFlags struct {
 // entrypoints (when defaultCloud is "aws", "azure", or "gcp").
 func NewRootCmd(defaultCloud string) *cobra.Command {
 	useName := "bnkctl"
-	shortDesc := "Unified F5 BNK multi-cloud lifecycle & scenario CLI (AWS, Azure, GCP)"
+	shortDesc := "Unified F5 BNK multi-cloud lifecycle & scenario CLI (AWS, Azure, GCP, OpenShift, On-Prem)"
 	switch defaultCloud {
 	case intent.ProviderAWS:
 		useName = "awsbnkctl"
@@ -62,8 +62,8 @@ func NewRootCmd(defaultCloud string) *cobra.Command {
 	}
 
 	pf := root.PersistentFlags()
-	pf.StringVar(&flags.Cloud, "cloud", defaultCloud, "Target cloud provider (aws, azure, gcp); inferred from cluster.yaml when omitted")
-	pf.StringVarP(&flags.ConfigPath, "config", "c", "cluster.yaml", "Path to cluster.yaml intent file")
+	pf.StringVar(&flags.Cloud, "cloud", defaultCloud, "Target cloud/platform provider (aws, azure, gcp, openshift, onprem, baremetal, kind); inferred from cluster.yaml or workspace state directory when omitted")
+	pf.StringVarP(&flags.ConfigPath, "config", "c", "cluster.yaml", "Path to cluster.yaml intent file or workspace state directory")
 	pf.StringVar(&flags.StateDir, "state-dir", "", "Override state directory (defaults to .bnkctl/<cluster-name>)")
 	pf.StringVar(&flags.BNKVersion, "bnk-version", "", "Override BNK release version (e.g. 2.3.2-3.2598.3-0.0.464, 2.4.0, 2.5.0)")
 	pf.StringVar(&flags.FLOVersion, "flo-version", "", "Override FLO Helm chart version")
