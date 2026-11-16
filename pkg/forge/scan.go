@@ -17,15 +17,18 @@ import (
 	"github.com/JLCode-tech/bnkctl/pkg/k8s/bnkscan"
 )
 
-// ScanResult is the part of POST /api/k8s/clusters/{id}/scan awsbnkctl reads.
+// ScanResult is the part of POST /api/k8s/clusters/{id}/scan bnkctl reads.
 // Forge returns either the typed envelope or {"success","message","scan_results"}
 // wrapping it; ParseScanResult accepts both.
 type ScanResult struct {
-	ClusterID   int    `json:"cluster_id"`
-	ClusterName string `json:"cluster_name"`
-	BNKInstall  struct {
+	ClusterID          int    `json:"cluster_id"`
+	ClusterName        string `json:"cluster_name"`
+	ConnectivityStatus string `json:"connectivity_status,omitempty"`
+	Error              string `json:"error,omitempty"`
+	BNKInstall         struct {
 		Status string `json:"status"`
 		Health string `json:"health"`
+		Error  string `json:"error,omitempty"`
 		CRDs   struct {
 			Total          int      `json:"total"`
 			Groups         []string `json:"groups"`
@@ -56,24 +59,68 @@ type ScanResult struct {
 // ParseScanResult decodes scan_cluster output in either envelope shape.
 func ParseScanResult(text string) (ScanResult, error) {
 	var wrapper struct {
-		Success     *bool           `json:"success"`
-		Message     string          `json:"message"`
-		ScanResults json.RawMessage `json:"scan_results"`
+		Success            *bool           `json:"success"`
+		Message            string          `json:"message"`
+		Error              string          `json:"error"`
+		ConnectivityStatus string          `json:"connectivity_status"`
+		ScanResults        json.RawMessage `json:"scan_results"`
 	}
 	if err := json.Unmarshal([]byte(text), &wrapper); err != nil {
 		return ScanResult{}, fmt.Errorf("scan_cluster: decode: %w", err)
 	}
+	if wrapper.Success != nil && !*wrapper.Success && (len(wrapper.ScanResults) == 0 || string(wrapper.ScanResults) == "null") {
+		msg := wrapper.Message
+		if msg == "" {
+			msg = wrapper.Error
+		}
+		if msg == "" {
+			msg = "scan failed"
+		}
+		return ScanResult{}, fmt.Errorf("scan_cluster: %s", msg)
+	}
 	body := []byte(text)
 	if len(wrapper.ScanResults) > 0 && string(wrapper.ScanResults) != "null" {
 		body = wrapper.ScanResults
-	} else if wrapper.Success != nil && !*wrapper.Success {
-		return ScanResult{}, fmt.Errorf("scan_cluster: %s", wrapper.Message)
 	}
 	var out ScanResult
 	if err := json.Unmarshal(body, &out); err != nil {
 		return ScanResult{}, fmt.Errorf("scan_cluster: decode scan_results: %w", err)
 	}
+	if out.ConnectivityStatus == "" && wrapper.ConnectivityStatus != "" {
+		out.ConnectivityStatus = wrapper.ConnectivityStatus
+	}
+	if out.Error == "" && wrapper.Error != "" {
+		out.Error = wrapper.Error
+	}
 	return out, nil
+}
+
+// IsOffline reports whether Forge's scan indicates the cluster is unreachable or errored.
+func (s ScanResult) IsOffline() bool {
+	for _, st := range []string{s.ConnectivityStatus, s.BNKInstall.Status, s.BNKInstall.Health} {
+		switch strings.ToLower(strings.TrimSpace(st)) {
+		case "offline", "unreachable", "disconnected", "error", "failed":
+			return true
+		}
+	}
+	return strings.TrimSpace(s.Error) != "" || strings.TrimSpace(s.BNKInstall.Error) != ""
+}
+
+// OfflineReason returns a concise human-readable reason when IsOffline() is true.
+func (s ScanResult) OfflineReason() string {
+	if strings.TrimSpace(s.Error) != "" {
+		return strings.TrimSpace(s.Error)
+	}
+	if strings.TrimSpace(s.BNKInstall.Error) != "" {
+		return strings.TrimSpace(s.BNKInstall.Error)
+	}
+	if strings.TrimSpace(s.ConnectivityStatus) != "" {
+		return "connectivity_status=" + strings.TrimSpace(s.ConnectivityStatus)
+	}
+	if strings.TrimSpace(s.BNKInstall.Status) != "" {
+		return "bnk_install.status=" + strings.TrimSpace(s.BNKInstall.Status)
+	}
+	return "cluster offline"
 }
 
 // Generation classifies the cluster from the CRD groups forge indexed.
@@ -162,7 +209,7 @@ func (s *Severity) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// HealthResult is the part of GET /f5bnk/health awsbnkctl reads.
+// HealthResult is the part of GET /f5bnk/health bnkctl reads.
 type HealthResult struct {
 	ClusterID  int            `json:"cluster_id"`
 	Overall    Severity       `json:"overall"`
@@ -172,10 +219,29 @@ type HealthResult struct {
 	Security   Severity       `json:"security"`
 	AI         Severity       `json:"ai"`
 	Counts     map[string]any `json:"counts"`
+	Error      string         `json:"error,omitempty"`
 }
 
 // ParseHealthResult decodes bnk_health output.
 func ParseHealthResult(text string) (HealthResult, error) {
+	var wrapper struct {
+		Success *bool  `json:"success"`
+		Message string `json:"message"`
+		Error   string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(text), &wrapper); err != nil {
+		return HealthResult{}, fmt.Errorf("bnk_health: decode: %w", err)
+	}
+	if wrapper.Success != nil && !*wrapper.Success {
+		msg := wrapper.Message
+		if msg == "" {
+			msg = wrapper.Error
+		}
+		if msg == "" {
+			msg = "health check failed"
+		}
+		return HealthResult{}, fmt.Errorf("bnk_health: %s", msg)
+	}
 	var out HealthResult
 	if err := json.Unmarshal([]byte(text), &out); err != nil {
 		return HealthResult{}, fmt.Errorf("bnk_health: decode: %w", err)

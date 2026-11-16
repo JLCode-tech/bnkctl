@@ -127,35 +127,46 @@ func applyPositionalConfig(flags *GlobalFlags, args []string) {
 
 func resolveRuntime(flags *GlobalFlags) (*intent.Cluster, *state.State, provider.Provider, error) {
 	var cl *intent.Cluster
+	var wsDirFromConfig string
 	configPath := strings.TrimSpace(flags.ConfigPath)
 	if configPath != "" {
 		if info, err := os.Stat(configPath); err == nil && info.IsDir() {
 			candidate := filepath.Join(configPath, "cluster.yaml")
 			if _, cErr := os.Stat(candidate); cErr == nil {
 				configPath = candidate
+			} else if isWorkspaceStateDir(configPath) {
+				wsDirFromConfig = configPath
+				if flags.StateDir == "" {
+					flags.StateDir = configPath
+				}
+			} else {
+				configPath = candidate
 			}
 		}
-		if _, err := os.Stat(configPath); err == nil {
-			loaded, err := intent.Load(configPath)
-			if err != nil {
+		if wsDirFromConfig == "" {
+			if _, err := os.Stat(configPath); err == nil {
+				loaded, err := intent.Load(configPath)
+				if err != nil {
+					return nil, nil, nil, fmt.Errorf("loading %s: %w", configPath, err)
+				}
+				cl = loaded
+			} else if configPath != "cluster.yaml" {
 				return nil, nil, nil, fmt.Errorf("loading %s: %w", configPath, err)
 			}
-			cl = loaded
-		} else if configPath != "cluster.yaml" {
-			return nil, nil, nil, fmt.Errorf("loading %s: %w", configPath, err)
 		}
 	}
 	loadDotEnvFiles(configPath)
 	if cl == nil {
-		cloud := flags.Cloud
-		if cloud == "" {
-			cloud = intent.ProviderAWS
+		wsHint := wsDirFromConfig
+		if wsHint == "" {
+			wsHint = flags.StateDir
 		}
+		cloud, clusterName, region := inferWorkspaceIdentity(wsHint, flags.Cloud)
 		cl = &intent.Cluster{
 			APIVersion: intent.APIVersion,
 			Kind:       intent.Kind,
 			Cloud:      &intent.CloudSpec{Provider: cloud},
-			Metadata:   intent.Metadata{Name: "bnk-cluster", Region: defaultRegionForCloud(cloud)},
+			Metadata:   intent.Metadata{Name: clusterName, Region: region, Location: region},
 		}
 	}
 	if flags.Cloud != "" {
@@ -317,7 +328,68 @@ func defaultRegionForCloud(cloud string) string {
 		return "eastus2"
 	case intent.ProviderGCP:
 		return "us-central1"
+	case intent.ProviderOpenShift, intent.ProviderOnPrem, intent.ProviderBareMetal, intent.ProviderKind:
+		return "local"
 	default:
 		return "ap-southeast-2"
 	}
+}
+
+func isWorkspaceStateDir(dir string) bool {
+	for _, f := range []string{"state.env", "kubeconfig", "forge_link.json", "underlay.env", "artifacts/kubeconfig"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func inferWorkspaceIdentity(wsDir, explicitCloud string) (cloud, clusterName, region string) {
+	cloud = strings.TrimSpace(explicitCloud)
+	clusterName = "bnk-cluster"
+	if wsDir != "" {
+		clean := filepath.Clean(wsDir)
+		base := filepath.Base(clean)
+		if base != "" && base != "." && base != "/" {
+			clusterName = base
+		}
+		if cloud == "" {
+			lowerPath := strings.ToLower(filepath.ToSlash(clean))
+			switch {
+			case strings.Contains(lowerPath, ".azrbnkctl") || strings.Contains(lowerPath, "/azure/"):
+				cloud = intent.ProviderAzure
+			case strings.Contains(lowerPath, ".gkebnkctl") || strings.Contains(lowerPath, "/gcp/"):
+				cloud = intent.ProviderGCP
+			case strings.Contains(lowerPath, ".awsbnkctl") || strings.Contains(lowerPath, "/aws/"):
+				cloud = intent.ProviderAWS
+			}
+		}
+		if st, err := state.Load(clean); err == nil && st != nil {
+			if cloud == "" {
+				switch {
+				case st.Get("CLOUD") != "":
+					cloud = st.Get("CLOUD")
+				case st.Get("AKS_CLUSTER_NAME") != "" || st.Get("RG_NAME") != "" || st.Get("VNET_NAME") != "":
+					cloud = intent.ProviderAzure
+				case st.Get("GKE_CLUSTER_NAME") != "" || st.Get("GCP_PROJECT") != "":
+					cloud = intent.ProviderGCP
+				case st.Get("EKS_CLUSTER_NAME") != "" || st.Get("VPC_ID") != "":
+					cloud = intent.ProviderAWS
+				}
+			}
+			for _, rk := range []string{"REGION", "LOCATION", "AWS_REGION", "AZURE_LOCATION", "GCP_REGION"} {
+				if v := strings.TrimSpace(st.Get(rk)); v != "" {
+					region = v
+					break
+				}
+			}
+		}
+	}
+	if cloud == "" {
+		cloud = intent.ProviderAWS
+	}
+	if region == "" {
+		region = defaultRegionForCloud(cloud)
+	}
+	return cloud, clusterName, region
 }

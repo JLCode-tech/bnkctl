@@ -2,10 +2,19 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/JLCode-tech/bnkctl/pkg/forge"
 )
 
 func TestCLIEntrypointsAndMatrixDryRun(t *testing.T) {
@@ -178,5 +187,168 @@ cluster:
 		if err := cmd.Execute(); err == nil {
 			t.Fatalf("expected error for missing config %v, got nil (output: %s)", args, out.String())
 		}
+	}
+}
+
+func TestForgeRegisterHardening_WorkspaceAndFlags(t *testing.T) {
+	origPing := forge.PingServerVersionFunc
+	defer func() { forge.PingServerVersionFunc = origPing }()
+	forge.PingServerVersionFunc = func(_ context.Context, _ []byte, _ time.Duration) (string, error) {
+		return "", fmt.Errorf("dial tcp 127.0.0.1:6443: connection refused")
+	}
+
+	var receivedProjectName, receivedProjectType, receivedCloudProvider string
+	var receivedCredTemplateID int
+	mcpCalls := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/auth/login":
+			_ = json.NewEncoder(w).Encode(map[string]string{"token": "tok"})
+		case r.URL.Path == "/api/credential-templates":
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"id":                      5,
+					"name":                    "Azure Local - ALM2",
+					"provider":                "azure",
+					"is_default":              true,
+					"has_azure_credentials":   false,
+					"has_azure_client_secret": false,
+				},
+			})
+		case r.URL.Path == "/api/credential-templates/5":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":                      5,
+				"name":                    "Azure Local - ALM2",
+				"provider":                "azure",
+				"is_default":              true,
+				"has_azure_credentials":   false,
+				"has_azure_client_secret": false,
+			})
+		case strings.HasPrefix(r.URL.Path, "/mcp"):
+			body, _ := io.ReadAll(r.Body)
+			var rpc struct {
+				ID     int64           `json:"id"`
+				Method string          `json:"method"`
+				Params json.RawMessage `json:"params"`
+			}
+			_ = json.Unmarshal(body, &rpc)
+			if rpc.ID == 0 && rpc.Method == "notifications/initialized" {
+				w.WriteHeader(http.StatusAccepted)
+				return
+			}
+			if rpc.Method == "initialize" {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"jsonrpc": "2.0",
+					"id":      rpc.ID,
+					"result":  map[string]any{"protocolVersion": "2024-11-05"},
+				})
+				return
+			}
+			var p struct {
+				Name      string         `json:"name"`
+				Arguments map[string]any `json:"arguments"`
+			}
+			_ = json.Unmarshal(rpc.Params, &p)
+			mcpCalls++
+			var text string
+			switch p.Name {
+			case "create_project":
+				receivedProjectName, _ = p.Arguments["name"].(string)
+				receivedProjectType, _ = p.Arguments["project_type"].(string)
+				receivedCloudProvider, _ = p.Arguments["cloud_provider"].(string)
+				if v, ok := p.Arguments["credential_template_id"].(float64); ok {
+					receivedCredTemplateID = int(v)
+				}
+				text = fmt.Sprintf(`{"project":{"id":69,"name":%q},"success":true}`, receivedProjectName)
+			case "create_cluster":
+				text = `{"cluster":{"id":54,"name":"poc-dual-interface"},"success":true}`
+			case "scan_cluster":
+				text = `{"bnk_install":{"status":"installed","tmm":{"pods":2,"running":2},"controller":{"pods":1,"running":1},"crds":{"groups":["gateway.k8s.f5.com"]}}}`
+			case "bnk_health":
+				text = `{"overall":"healthy","platform":"healthy","dataPlane":"healthy"}`
+			case "get_cluster":
+				text = `{"id":54,"name":"poc-dual-interface","status":"connected"}`
+			default:
+				text = `{}`
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      rpc.ID,
+				"result": map[string]any{
+					"content": []map[string]any{{"type": "text", "text": text}},
+				},
+			})
+		}
+	}))
+	defer srv.Close()
+
+	baseDir := t.TempDir()
+	wsDir := filepath.Join(baseDir, ".azrbnkctl", "poc-dual-interface")
+	if err := os.MkdirAll(wsDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	kcFile := filepath.Join(wsDir, "kubeconfig")
+	if err := os.WriteFile(kcFile, []byte("apiVersion: v1\nkind: Config\nclusters:\n- name: aks\n  cluster:\n    server: https://127.0.0.1:6443\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "state.env"), []byte("AKS_CLUSTER_NAME=aks-poc-dual-interface\nLOCATION=eastus2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewRootCmd("")
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{
+		"forge", "register",
+		"-c", wsDir,
+		"--mcp-url", srv.URL + "/mcp/",
+		"--forge-url", srv.URL,
+		"--credential-template", "Azure Local - ALM2",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("forge register failed: %v\noutput:\n%s", err, out.String())
+	}
+
+	output := out.String()
+	if receivedProjectName != "bnkctl-poc-dual-interface" {
+		t.Errorf("receivedProjectName = %q, want bnkctl-poc-dual-interface", receivedProjectName)
+	}
+	if receivedCloudProvider != "azure" || receivedProjectType != "cloud-azure" {
+		t.Errorf("cloud/type = %q/%q, want azure/cloud-azure", receivedCloudProvider, receivedProjectType)
+	}
+	if receivedCredTemplateID != 5 {
+		t.Errorf("receivedCredTemplateID = %d, want 5", receivedCredTemplateID)
+	}
+	for _, wantSub := range []string{
+		"Warning: pre-flight cluster reachability check failed",
+		"lacks Azure credentials",
+		"Scan: bnk=installed",
+		"Health: overall=healthy",
+	} {
+		if !strings.Contains(output, wantSub) {
+			t.Errorf("expected output to contain %q, got:\n%s", wantSub, output)
+		}
+	}
+
+	// Second call with --rescan should bypass idempotency and re-run scan_cluster
+	mcpCallsBefore := mcpCalls
+	cmd2 := NewRootCmd("")
+	var out2 bytes.Buffer
+	cmd2.SetOut(&out2)
+	cmd2.SetErr(&out2)
+	cmd2.SetArgs([]string{
+		"forge", "register",
+		"-c", wsDir,
+		"--mcp-url", srv.URL + "/mcp/",
+		"--forge-url", srv.URL,
+		"--rescan",
+	})
+	if err := cmd2.Execute(); err != nil {
+		t.Fatalf("forge register --rescan failed: %v", err)
+	}
+	if mcpCalls <= mcpCallsBefore+1 {
+		t.Errorf("expected --rescan to re-run create_project/create_cluster/scan_cluster, mcpCalls delta = %d", mcpCalls-mcpCallsBefore)
 	}
 }

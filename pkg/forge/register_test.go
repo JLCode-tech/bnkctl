@@ -22,13 +22,13 @@ type scriptedForge struct {
 func newScriptedForge() *scriptedForge {
 	return &scriptedForge{
 		responses: map[string]string{
-			"create_project": `{"project":{"id":11,"name":"awsbnkctl-default"},"success":true}`,
+			"create_project": `{"project":{"id":11,"name":"bnkctl-default"},"success":true}`,
 			"create_cluster": `{"cluster":{"id":99,"name":"bnk-prod"},"success":true}`,
 			"get_cluster":    `{"id":99,"name":"bnk-prod","status":"connected"}`,
 			"delete_cluster": `{"success":true}`,
 			"delete_project": `{"success":true}`,
-			"scan_cluster":   `{"namespaces":[]}`,
-			"bnk_health":     `{"healthy":true}`,
+			"scan_cluster":   `{"bnk_install":{"status":"installed","tmm":{"pods":2,"running":2},"controller":{"pods":1,"running":1},"crds":{"groups":["gateway.k8s.f5.com"]}}}`,
+			"bnk_health":     `{"overall":"healthy","platform":"healthy","dataPlane":"healthy"}`,
 			"system_version": `{"version":"3.1.0"}`,
 		},
 	}
@@ -194,16 +194,83 @@ func TestRegister_WithScan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if !strings.Contains(res.ScanOutput, "namespaces") {
-		t.Errorf("scan output missing payload: %s", res.ScanOutput)
+	if !strings.Contains(res.ScanSummary, "bnk=installed") {
+		t.Errorf("scan summary missing bnk=installed: %s", res.ScanSummary)
 	}
-	if !strings.Contains(res.HealthCheck, "healthy") {
-		t.Errorf("health output missing payload: %s", res.HealthCheck)
+	if !strings.Contains(res.HealthSummary, "overall=healthy") {
+		t.Errorf("health summary missing overall=healthy: %s", res.HealthSummary)
 	}
 	got := f.calls()
 	want := []string{"create_project", "create_cluster", "scan_cluster", "bnk_health"}
 	if !equalSlices(got, want) {
 		t.Errorf("call order = %v, want %v", got, want)
+	}
+}
+
+func TestRegister_ForceBypassesIdempotency(t *testing.T) {
+	f := newScriptedForge()
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+
+	c := NewClient(srv.URL + "/mcp/")
+	dir := t.TempDir()
+	req := RegisterRequest{
+		WorkspaceName:    "default",
+		WorkspaceDir:     dir,
+		ClusterName:      "bnk-prod",
+		Region:           "us-east-1",
+		Kubeconfig:       []byte("apiVersion: v1\nkind: Config\n"),
+		PostRegisterScan: true,
+	}
+	if _, err := Register(context.Background(), c, req); err != nil {
+		t.Fatalf("first Register: %v", err)
+	}
+	req.Force = true
+	res, err := Register(context.Background(), c, req)
+	if err != nil {
+		t.Fatalf("second Register with Force: %v", err)
+	}
+	if res.ScanSummary == "" {
+		t.Errorf("expected ScanSummary on forced rescan, got empty")
+	}
+	got := f.calls()
+	want := []string{
+		"create_project", "create_cluster", "scan_cluster", "bnk_health",
+		"create_project", "create_cluster", "scan_cluster", "bnk_health",
+	}
+	if !equalSlices(got, want) {
+		t.Errorf("call order = %v, want %v", got, want)
+	}
+}
+
+func TestRegister_SurfacesScanAndHealthErrors(t *testing.T) {
+	f := newScriptedForge()
+	f.responses["scan_cluster"] = `{"connectivity_status":"offline","error":"dial tcp 10.0.0.1:443: i/o timeout"}`
+	f.responses["bnk_health"] = `{"success":false,"message":"cluster unreachable"}`
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	defer srv.Close()
+
+	c := NewClient(srv.URL + "/mcp/")
+	dir := t.TempDir()
+	res, err := Register(context.Background(), c, RegisterRequest{
+		WorkspaceName:    "default",
+		WorkspaceDir:     dir,
+		ClusterName:      "bnk-prod",
+		Region:           "us-east-1",
+		Kubeconfig:       []byte("apiVersion: v1\nkind: Config\n"),
+		PostRegisterScan: true,
+	})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if res.ScanErr == nil {
+		t.Error("expected non-nil ScanErr when cluster scan reports offline")
+	}
+	if res.HealthErr == nil {
+		t.Error("expected non-nil HealthErr when bnk_health fails")
+	}
+	if len(res.Warnings) < 2 {
+		t.Errorf("expected warnings for scan and health failures, got %v", res.Warnings)
 	}
 }
 

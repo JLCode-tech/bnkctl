@@ -90,7 +90,7 @@ func Phase29ForgeRegister(ctx context.Context, cl *intent.Cluster, st *state.Sta
 		PostRegisterScan:     true,
 	}
 	if req.ProjectName == "" {
-		req.ProjectName = "gkebnkctl-" + wsName
+		req.ProjectName = cl.Forge.ResolveProjectName(wsName)
 	}
 
 	var res forge.RegisterResult
