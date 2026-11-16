@@ -2,6 +2,13 @@
 
 All notable changes to `bnkctl` are documented in this file.
 
+## [2.8.0](https://github.com/JLCode-tech/bnkctl/compare/v2.7.2...v2.8.0) (2026-11-16)
+
+
+### Features
+
+* **forge:** harden bnkctl forge register across clouds, OpenShift, and on-prem ([56df1cb](https://github.com/JLCode-tech/bnkctl/commit/56df1cb3d73ec0ad3b661eb3afbfc4a4d423d6da))
+
 ## [2.7.2](https://github.com/JLCode-tech/bnkctl/compare/v2.7.1...v2.7.2) (2026-11-04)
 
 
