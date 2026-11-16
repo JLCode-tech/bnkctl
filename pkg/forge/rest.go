@@ -103,20 +103,56 @@ func RegisterREST(ctx context.Context, restURL string, req RegisterRequest, cred
 		return RegisterResult{}, fmt.Errorf("forge.RegisterREST: kubeconfig is empty")
 	}
 	if req.ProjectName == "" {
-		req.ProjectName = defaultProjectNameForCloud(req.CloudProvider, req.WorkspaceName)
+		req.ProjectName = DefaultProjectName(req.WorkspaceName)
 	}
 
 	base := resolveRESTBaseURL(restURL)
+	req.CloudProvider = NormalizeProvider(req.CloudProvider, req.ProjectType)
+	req.ProjectType = NormalizeProjectType(req.CloudProvider, req.ProjectType)
+
+	baseDir := req.KubeconfigBaseDir
+	if baseDir == "" {
+		baseDir = req.WorkspaceDir
+	}
+	prepKC, kcWarnings, err := PrepareKubeconfig(req.Kubeconfig, KubeconfigOptions{
+		BaseDir:            baseDir,
+		ServerURL:          req.ServerURL,
+		ContainerizedForge: IsContainerizedForgeURL(base),
+	})
+	if err != nil {
+		return RegisterResult{}, fmt.Errorf("forge.RegisterREST prepare kubeconfig: %w", err)
+	}
+	req.Kubeconfig = prepKC
+	var warnings []string
+	warnings = append(warnings, kcWarnings...)
 
 	token, err := restLogin(ctx, base, creds.restUsername(), creds.restPassword())
 	if err != nil {
 		return RegisterResult{}, fmt.Errorf("forge REST login: %w", err)
 	}
 
+	if req.CredentialTemplateName != "" || req.CredentialTemplateID > 0 || isCloudProviderRequiringTemplate(req.CloudProvider) {
+		resolvedID, tmplWarnings, tmplErr := ResolveAndValidateCredentialTemplate(ctx, base, creds, req.CloudProvider, req.CredentialTemplateID, req.CredentialTemplateName)
+		if tmplErr != nil {
+			if req.CredentialTemplateName != "" {
+				return RegisterResult{}, tmplErr
+			}
+		} else {
+			if resolvedID > 0 {
+				req.CredentialTemplateID = resolvedID
+			}
+			warnings = append(warnings, tmplWarnings...)
+		}
+	}
+
 	proj, err := restCreateProject(ctx, base, token, req)
 	if err != nil {
 		return RegisterResult{}, fmt.Errorf("forge REST create project: %w", err)
 	}
+	if req.CredentialTemplateID > 0 {
+		_ = restUpdateProjectCredentialTemplate(ctx, base, token, proj.ID, req.CredentialTemplateID)
+	}
+	_ = restActivateProject(ctx, base, token, proj.ID)
 
 	cluster, err := restCreateCluster(ctx, base, token, proj.ID, req)
 	if err != nil {
@@ -134,11 +170,32 @@ func RegisterREST(ctx context.Context, restURL string, req RegisterRequest, cred
 		Workspace:    req.WorkspaceName,
 		Status:       "registered",
 	}
-	if err := WriteLink(req.WorkspaceDir, link); err != nil {
-		return RegisterResult{Link: link, ForgeURL: base},
-			fmt.Errorf("registration succeeded but writing forge_link.json failed: %w", err)
+	out := RegisterResult{
+		Link:     link,
+		ForgeURL: base,
+		Warnings: warnings,
 	}
-	return RegisterResult{Link: link, ForgeURL: base}, nil
+	if err := WriteLink(req.WorkspaceDir, link); err != nil {
+		return out, fmt.Errorf("registration succeeded but writing forge_link.json failed: %w", err)
+	}
+
+	if req.PostRegisterScan {
+		rawScan, scanErr := restScanCluster(ctx, base, token, cluster.ID)
+		if scanErr != nil {
+			out.ScanErr = scanErr
+			out.ScanOutput = "<scan_cluster failed: " + scanErr.Error() + ">"
+			out.Warnings = append(out.Warnings, fmt.Sprintf("cluster scan failed for cluster %d: %v", cluster.ID, scanErr))
+		} else {
+			out.ScanOutput = rawScan
+			if sr, perr := ParseScanResult(rawScan); perr == nil {
+				out.ScanSummary = sr.Summary()
+			} else {
+				out.ScanErr = perr
+				out.Warnings = append(out.Warnings, fmt.Sprintf("cluster scan warning: %v", perr))
+			}
+		}
+	}
+	return out, nil
 }
 
 // UnregisterREST deletes cluster and project via REST.
@@ -225,39 +282,86 @@ func UnregisterRESTByName(ctx context.Context, restURL, clusterName string, cred
 	return nil
 }
 
-func normalizeCloudProvider(cloudProvider, projectType string) string {
-	cp := strings.ToLower(strings.TrimSpace(cloudProvider))
-	cp = strings.TrimPrefix(cp, "cloud-")
+// NormalizeProvider maps cloud/platform aliases onto canonical Forge provider
+// identifiers ("aws", "azure", "gcp", "openshift", "onprem", "baremetal", "kind", "ibm", "ssh").
+func NormalizeProvider(cloudProvider, projectType string) string {
+	cp := normalizeProviderToken(cloudProvider)
 	if cp == "" {
-		pt := strings.ToLower(strings.TrimSpace(projectType))
-		pt = strings.TrimPrefix(pt, "cloud-")
-		if pt == "aws" || pt == "azure" || pt == "gcp" {
-			cp = pt
-		}
+		cp = normalizeProviderToken(projectType)
 	}
 	if cp == "" {
-		cp = "aws"
+		return "aws"
 	}
 	return cp
 }
 
-func cliToolNameForCloud(cloudProvider string) string {
-	switch normalizeCloudProvider(cloudProvider, "") {
-	case "azure":
-		return "azrbnkctl"
-	case "gcp":
-		return "gkebnkctl"
+func normalizeProviderToken(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	s = strings.TrimPrefix(s, "cloud-")
+	switch s {
+	case "aws", "eks":
+		return "aws"
+	case "azure", "aks", "azr":
+		return "azure"
+	case "gcp", "gke":
+		return "gcp"
+	case "openshift", "ocp", "crc", "redhat":
+		return "openshift"
+	case "onprem", "on-prem", "on_prem":
+		return "onprem"
+	case "baremetal", "bare-metal", "bare_metal":
+		return "baremetal"
+	case "kind", "k3s", "minikube", "docker-desktop":
+		return "kind"
+	case "ibm", "iks":
+		return "ibm"
+	case "ssh":
+		return "ssh"
 	default:
-		return "awsbnkctl"
+		return s
 	}
 }
 
-func defaultProjectNameForCloud(cloudProvider, workspace string) string {
-	return cliToolNameForCloud(cloudProvider) + "-" + workspace
+func normalizeCloudProvider(cloudProvider, projectType string) string {
+	return NormalizeProvider(cloudProvider, projectType)
+}
+
+// NormalizeProjectType returns the Forge project_type for a given provider
+// ("cloud-aws", "cloud-azure", "cloud-gcp" for hyperscalers, or "kubernetes"
+// for OpenShift, On-Prem, Bare-Metal, and local clusters).
+func NormalizeProjectType(cloudProvider, projectType string) string {
+	prov := NormalizeProvider(cloudProvider, projectType)
+	pt := strings.ToLower(strings.TrimSpace(projectType))
+	switch prov {
+	case "openshift", "onprem", "baremetal", "kind":
+		if pt == "" || strings.HasPrefix(pt, "cloud-") {
+			return "kubernetes"
+		}
+		return pt
+	case "aws", "azure", "gcp":
+		if pt == "" || strings.HasPrefix(pt, "cloud-") {
+			return "cloud-" + prov
+		}
+		return pt
+	default:
+		if pt != "" {
+			return pt
+		}
+		return "cloud-" + prov
+	}
+}
+
+// DefaultProjectName returns the standardized Forge project name ("bnkctl-<workspace>").
+func DefaultProjectName(workspace string) string {
+	ws := strings.TrimSpace(workspace)
+	if ws == "" {
+		return "bnkctl"
+	}
+	return "bnkctl-" + ws
 }
 
 func defaultProjectName(workspace string) string {
-	return defaultProjectNameForCloud("aws", workspace)
+	return DefaultProjectName(workspace)
 }
 
 // IsMCPCatalogGapErr detects when FastMCP lacks create_project / create_cluster tools.
@@ -303,23 +407,19 @@ type restProject struct {
 }
 
 func restCreateProject(ctx context.Context, base, token string, req RegisterRequest) (restProject, error) {
-	cloudProvider := normalizeCloudProvider(req.CloudProvider, req.ProjectType)
-	projectType := req.ProjectType
-	if projectType == "" {
-		projectType = "cloud-" + cloudProvider
-	}
+	cloudProvider := NormalizeProvider(req.CloudProvider, req.ProjectType)
+	projectType := NormalizeProjectType(cloudProvider, req.ProjectType)
 	env := req.Environment
 	if env == "" {
 		env = "dev"
 	}
-	toolName := cliToolNameForCloud(cloudProvider)
 	body := map[string]any{
 		"name":           req.ProjectName,
 		"project_type":   projectType,
 		"cloud_provider": cloudProvider,
 		"region":         req.Region,
 		"environment":    env,
-		"description":    fmt.Sprintf("Created by %s for workspace %q", toolName, req.WorkspaceName),
+		"description":    fmt.Sprintf("Created by bnkctl for workspace %q", req.WorkspaceName),
 	}
 	if req.CredentialTemplateID > 0 {
 		body["credential_template_id"] = req.CredentialTemplateID
@@ -385,6 +485,31 @@ func restCreateProject(ctx context.Context, base, token string, req RegisterRequ
 		return restFindProjectByName(ctx, base, token, req.ProjectName)
 	}
 	return restProject{ID: id, Name: name}, nil
+}
+
+func restUpdateProjectCredentialTemplate(ctx context.Context, base, token string, projectID, credentialTemplateID int) error {
+	if projectID <= 0 || credentialTemplateID <= 0 {
+		return nil
+	}
+	url := fmt.Sprintf("%s/api/projects/%d", base, projectID)
+	return restPut(ctx, url, token, map[string]any{"credential_template_id": credentialTemplateID}, nil)
+}
+
+func restActivateProject(ctx context.Context, base, token string, projectID int) error {
+	if projectID <= 0 {
+		return nil
+	}
+	url := fmt.Sprintf("%s/api/projects/%d/activate", base, projectID)
+	return restPost(ctx, url, token, map[string]any{}, nil)
+}
+
+func restScanCluster(ctx context.Context, base, token string, clusterID int) (string, error) {
+	url := fmt.Sprintf("%s/api/k8s/clusters/%d/scan", base, clusterID)
+	var raw json.RawMessage
+	if err := restPost(ctx, url, token, map[string]any{}, &raw); err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 func restFindProjectByName(ctx context.Context, base, token, name string) (restProject, error) {

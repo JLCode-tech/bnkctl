@@ -20,10 +20,18 @@ type RegisterRequest struct {
 	ForgeRESTURL  string
 	WorkspaceName string // logical workspace label (used in project name)
 	WorkspaceDir  string // filesystem dir where forge_link.json lives
-	ProjectName   string // forge project name; empty → "<cloud>bnkctl-<workspace>"
-	ClusterName   string // EKS cluster name registered into forge
-	Region        string // AWS region
-	Kubeconfig    []byte // raw YAML for the EKS cluster
+	ProjectName   string // forge project name; empty → "bnkctl-<workspace>"
+	ClusterName   string // cluster name registered into forge
+	Region        string // cloud region or location
+	Kubeconfig    []byte // raw YAML for the cluster
+
+	// KubeconfigBaseDir is the directory used to resolve relative cert/key/tokenFile
+	// paths when inlining kubeconfig files. Empty defaults to WorkspaceDir.
+	KubeconfigBaseDir string
+
+	// ServerURL overrides the Kubernetes API server URL in the kubeconfig before
+	// uploading to Forge (e.g. when rewriting 127.0.0.1 or internal VIPs).
+	ServerURL string
 
 	// AWSProfile is the named AWS profile forge should use when minting
 	// EKS bearer tokens for this cluster. When empty, Register fills it
@@ -38,20 +46,31 @@ type RegisterRequest struct {
 	// Empty defaults to "dev".
 	Environment string
 
-	// ProjectType is the forge project type (e.g. "cloud-aws", "cloud-azure", "cloud-gcp").
-	// Empty defaults to "cloud-" + CloudProvider.
+	// ProjectType is the forge project type (e.g. "cloud-aws", "cloud-azure", "cloud-gcp", "kubernetes").
+	// Empty defaults to NormalizeProjectType(CloudProvider, "").
 	ProjectType string
 
-	// CloudProvider is the cloud provider label (e.g. "aws").
+	// CloudProvider is the provider/platform label (e.g. "aws", "azure", "gcp", "openshift", "onprem", "baremetal", "kind").
 	// Empty defaults to "aws".
 	CloudProvider string
 
 	// CredentialTemplateID is the forge credential template ID to attach to
-	// the newly-created project. When 0, no credential is attached and forge
-	// falls back to its default (typically the operator must wire it manually).
+	// the project.
 	CredentialTemplateID int
 
-	// If true, after CreateCluster azrbnkctl calls scan_cluster +
+	// CredentialTemplateName is an optional template ID or name ("5" or "Azure Local - ALM2")
+	// resolved via the Forge REST API prior to project creation.
+	CredentialTemplateName string
+
+	// RestCreds carries optional Forge REST credentials used when resolving or
+	// validating credential templates.
+	RestCreds RestCreds
+
+	// Force bypasses the forge_link.json early-exit idempotency check so
+	// re-running register re-uploads the kubeconfig and re-triggers the cluster scan.
+	Force bool
+
+	// If true, after CreateCluster bnkctl calls scan_cluster +
 	// bnk_health to seed forge's view and smoke-test the link.
 	PostRegisterScan bool
 }
@@ -62,8 +81,13 @@ type RegisterResult struct {
 	// LinkRefreshed is true when an existing link was kept but its Forge
 	// URLs were rewritten to the ones this run used.
 	LinkRefreshed bool
-	ScanOutput    string // raw JSON from scan_cluster (empty if skipped)
-	HealthCheck   string // raw JSON from bnk_health (empty if skipped)
+	ScanOutput    string   // raw JSON from scan_cluster (empty if skipped)
+	ScanSummary   string   // formatted one-line summary from scan_cluster
+	ScanErr       error    // non-nil when scan_cluster failed or cluster is offline
+	HealthCheck   string   // raw JSON from bnk_health (empty if skipped)
+	HealthSummary string   // formatted one-line summary from bnk_health
+	HealthErr     error    // non-nil when bnk_health failed
+	Warnings      []string // operator-facing warnings (loopback rewrite, missing template secrets, scan failures)
 	ForgeURL      string
 }
 
@@ -93,37 +117,73 @@ func Register(ctx context.Context, c *Client, req RegisterRequest) (RegisterResu
 		return RegisterResult{}, errors.New("forge.Register: kubeconfig is empty")
 	}
 
-	cloudProv := normalizeCloudProvider(req.CloudProvider, req.ProjectType)
+	cloudProv := NormalizeProvider(req.CloudProvider, req.ProjectType)
+	projType := NormalizeProjectType(cloudProv, req.ProjectType)
 	if req.ProjectName == "" {
-		req.ProjectName = defaultProjectNameForCloud(cloudProv, req.WorkspaceName)
+		req.ProjectName = DefaultProjectName(req.WorkspaceName)
 	}
 	if req.AWSProfile == "" {
 		req.AWSProfile = os.Getenv("AWS_PROFILE")
 	}
 
-	// Idempotency: existing link wins — but only when fully registered.
-	// A "pending" link means the forge handoff failed previously; treat it
-	// the same as no link so we fall through to the create_project →
-	// create_cluster path and complete the registration.
-	if existing, err := ReadLink(req.WorkspaceDir); err == nil {
-		if existing.IsRegistered() {
-			if _, gerr := c.GetCluster(ctx, existing.ClusterID); gerr != nil {
-				return RegisterResult{Link: existing, ForgeURL: c.URL()},
-					fmt.Errorf("workspace already linked to forge cluster_id=%d but get_cluster failed: %w",
-						existing.ClusterID, gerr)
+	baseDir := req.KubeconfigBaseDir
+	if baseDir == "" {
+		baseDir = req.WorkspaceDir
+	}
+	prepKC, kcWarnings, err := PrepareKubeconfig(req.Kubeconfig, KubeconfigOptions{
+		BaseDir:            baseDir,
+		ServerURL:          req.ServerURL,
+		ContainerizedForge: IsContainerizedForgeURL(c.URL()) || IsContainerizedForgeURL(req.ForgeRESTURL),
+	})
+	if err != nil {
+		return RegisterResult{}, fmt.Errorf("forge.Register: prepare kubeconfig: %w", err)
+	}
+	req.Kubeconfig = prepKC
+	var warnings []string
+	warnings = append(warnings, kcWarnings...)
+
+	// Resolve --credential-template <id|name> or validate default template credentials via REST when available.
+	if req.CredentialTemplateName != "" || strings.TrimSpace(req.ForgeRESTURL) != "" {
+		resolvedID, tmplWarnings, tmplErr := ResolveAndValidateCredentialTemplate(
+			ctx, req.ForgeRESTURL, req.RestCreds, cloudProv, req.CredentialTemplateID, req.CredentialTemplateName,
+		)
+		if tmplErr != nil {
+			if req.CredentialTemplateName != "" {
+				return RegisterResult{}, tmplErr
 			}
-			out := RegisterResult{Link: existing, ForgeURL: c.URL()}
-			if refreshLinkURLs(existing, c.URL(), req.ForgeRESTURL) {
-				if err := WriteLink(req.WorkspaceDir, existing); err != nil {
-					return out, fmt.Errorf("refresh link URLs: %w", err)
-				}
-				out.LinkRefreshed = true
+		} else {
+			if resolvedID > 0 {
+				req.CredentialTemplateID = resolvedID
 			}
-			return out, nil
+			warnings = append(warnings, tmplWarnings...)
 		}
-		// Link exists but is not registered (e.g. Status=="pending") — fall through.
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return RegisterResult{}, fmt.Errorf("read existing link: %w", err)
+	}
+
+	// Idempotency: existing link wins unless --force / --rescan is set, and only
+	// when fully registered. A "pending" link means the forge handoff failed
+	// previously; treat it the same as no link so we fall through to the
+	// create_project → create_cluster path and complete the registration.
+	if !req.Force {
+		if existing, err := ReadLink(req.WorkspaceDir); err == nil {
+			if existing.IsRegistered() {
+				if _, gerr := c.GetCluster(ctx, existing.ClusterID); gerr != nil {
+					return RegisterResult{Link: existing, ForgeURL: c.URL(), Warnings: warnings},
+						fmt.Errorf("workspace already linked to forge cluster_id=%d but get_cluster failed: %w",
+							existing.ClusterID, gerr)
+				}
+				out := RegisterResult{Link: existing, ForgeURL: c.URL(), Warnings: warnings}
+				if refreshLinkURLs(existing, c.URL(), req.ForgeRESTURL) {
+					if err := WriteLink(req.WorkspaceDir, existing); err != nil {
+						return out, fmt.Errorf("refresh link URLs: %w", err)
+					}
+					out.LinkRefreshed = true
+				}
+				return out, nil
+			}
+			// Link exists but is not registered (e.g. Status=="pending") — fall through.
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return RegisterResult{}, fmt.Errorf("read existing link: %w", err)
+		}
 	}
 
 	// 1) resolve or create project
@@ -131,11 +191,6 @@ func Register(ctx context.Context, c *Client, req RegisterRequest) (RegisterResu
 	if env == "" {
 		env = "dev"
 	}
-	projType := req.ProjectType
-	if projType == "" {
-		projType = "cloud-" + cloudProv
-	}
-	toolName := cliToolNameForCloud(cloudProv)
 
 	var projectID int
 	var projectName string
@@ -148,7 +203,7 @@ func Register(ctx context.Context, c *Client, req RegisterRequest) (RegisterResu
 		Region:               req.Region,
 		AWSProfile:           sendableAWSProfile(req.AWSProfile),
 		Environment:          env,
-		Description:          fmt.Sprintf("Created by %s for workspace %q", toolName, req.WorkspaceName),
+		Description:          fmt.Sprintf("Created by bnkctl for workspace %q", req.WorkspaceName),
 		CredentialTemplateID: req.CredentialTemplateID,
 	})
 	if err != nil {
@@ -167,12 +222,21 @@ func Register(ctx context.Context, c *Client, req RegisterRequest) (RegisterResu
 			}
 		}
 		if err != nil {
-			return RegisterResult{}, fmt.Errorf("create_project: %w", err)
+			return RegisterResult{Warnings: warnings}, fmt.Errorf("create_project: %w", err)
 		}
 	} else {
 		projectID = proj.Project.ID
 		projectName = proj.Project.Name
 		createdProject = true
+	}
+	if strings.TrimSpace(req.ForgeRESTURL) != "" {
+		base := resolveRESTBaseURL(req.ForgeRESTURL)
+		if tok, lerr := restLogin(ctx, base, req.RestCreds.restUsername(), req.RestCreds.restPassword()); lerr == nil {
+			if !createdProject && req.CredentialTemplateID > 0 {
+				_ = restUpdateProjectCredentialTemplate(ctx, base, tok, projectID, req.CredentialTemplateID)
+			}
+			_ = restActivateProject(ctx, base, tok, projectID)
+		}
 	}
 
 	// 2) create cluster (or reuse/recreate if already exists in project)
@@ -215,7 +279,7 @@ func Register(ctx context.Context, c *Client, req RegisterRequest) (RegisterResu
 			if createdProject {
 				_ = c.DeleteProject(ctx, projectID, true)
 			}
-			return RegisterResult{}, fmt.Errorf("create_cluster: %w", err)
+			return RegisterResult{Warnings: warnings}, fmt.Errorf("create_cluster: %w", err)
 		}
 	}
 
@@ -229,24 +293,47 @@ func Register(ctx context.Context, c *Client, req RegisterRequest) (RegisterResu
 		RegisteredAt: time.Now().UTC(),
 		Workspace:    req.WorkspaceName,
 	}
-	if err := WriteLink(req.WorkspaceDir, link); err != nil {
-		return RegisterResult{Link: link, ForgeURL: c.URL()},
-			fmt.Errorf("registration succeeded but writing forge_link.json failed: %w", err)
+	out := RegisterResult{
+		Link:     link,
+		ForgeURL: c.URL(),
+		Warnings: warnings,
 	}
-
-	out := RegisterResult{Link: link, ForgeURL: c.URL()}
+	if err := WriteLink(req.WorkspaceDir, link); err != nil {
+		return out, fmt.Errorf("registration succeeded but writing forge_link.json failed: %w", err)
+	}
 
 	// 3) optional post-register scan + smoke check
 	if req.PostRegisterScan {
 		if s, err := c.ScanCluster(ctx, cluster.Cluster.ID); err != nil {
+			out.ScanErr = err
 			out.ScanOutput = "<scan_cluster failed: " + err.Error() + ">"
+			out.Warnings = append(out.Warnings, fmt.Sprintf("cluster scan failed for cluster %d: %v", cluster.Cluster.ID, err))
 		} else {
 			out.ScanOutput = s
+			if sr, perr := ParseScanResult(s); perr != nil {
+				out.ScanErr = perr
+				out.Warnings = append(out.Warnings, fmt.Sprintf("cluster scan warning: %v", perr))
+			} else {
+				out.ScanSummary = sr.Summary()
+				if sr.IsOffline() {
+					offlineErr := fmt.Errorf("cluster %s is offline (%s)", req.ClusterName, sr.OfflineReason())
+					out.ScanErr = offlineErr
+					out.Warnings = append(out.Warnings, fmt.Sprintf("cluster %s reported offline by Forge scan (%s)", req.ClusterName, sr.OfflineReason()))
+				}
+			}
 		}
 		if h, err := c.BNKHealth(ctx, cluster.Cluster.ID); err != nil {
+			out.HealthErr = err
 			out.HealthCheck = "<bnk_health failed: " + err.Error() + ">"
+			out.Warnings = append(out.Warnings, fmt.Sprintf("bnk_health check failed for cluster %d: %v", cluster.Cluster.ID, err))
 		} else {
 			out.HealthCheck = h
+			if hr, perr := ParseHealthResult(h); perr != nil {
+				out.HealthErr = perr
+				out.Warnings = append(out.Warnings, fmt.Sprintf("bnk_health warning: %v", perr))
+			} else {
+				out.HealthSummary = hr.Summary()
+			}
 		}
 	}
 

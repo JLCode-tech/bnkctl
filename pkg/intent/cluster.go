@@ -34,9 +34,13 @@ const (
 	APIVersionGKE = "gkebnkctl/v1"
 	Kind          = "Cluster"
 
-	ProviderAWS   = "aws"
-	ProviderAzure = "azure"
-	ProviderGCP   = "gcp"
+	ProviderAWS       = "aws"
+	ProviderAzure     = "azure"
+	ProviderGCP       = "gcp"
+	ProviderOpenShift = "openshift"
+	ProviderOnPrem    = "onprem"
+	ProviderBareMetal = "baremetal"
+	ProviderKind      = "kind"
 
 	PatternExternalOnly  = "external-only"
 	PatternDualInterface = "dual-interface"
@@ -697,6 +701,16 @@ func (f *ForgeSpec) ResolveProjectType() string {
 	if f != nil && f.ProjectType != "" {
 		return f.ProjectType
 	}
+	if f != nil && f.CloudProvider != "" {
+		switch strings.ToLower(strings.TrimSpace(f.CloudProvider)) {
+		case "openshift", "ocp", "crc", "onprem", "on-prem", "baremetal", "bare-metal", "kind", "k3s", "minikube":
+			return "kubernetes"
+		case "azure", "aks", "azr":
+			return "cloud-azure"
+		case "gcp", "gke":
+			return "cloud-gcp"
+		}
+	}
 	return "cloud-aws"
 }
 
@@ -708,7 +722,7 @@ func (f *ForgeSpec) ResolveCloudProvider() string {
 	return "aws"
 }
 
-// ResolveProjectName returns the forge project name.
+// ResolveProjectName returns the forge project name ("bnkctl-<workspace>" by default).
 func (f *ForgeSpec) ResolveProjectName(workspaceName string) string {
 	if v := firstEnv("BNKCTL_FORGE_PROJECT", "FORGE_PROJECT", "AWSBNKCTL_FORGE_PROJECT", "AZRBNKCTL_FORGE_PROJECT", "GKEBNKCTL_FORGE_PROJECT"); v != "" {
 		return v
@@ -716,30 +730,11 @@ func (f *ForgeSpec) ResolveProjectName(workspaceName string) string {
 	if f != nil && f.ProjectName != "" {
 		return f.ProjectName
 	}
-	prefix := "bnkctl"
-	if f != nil {
-		switch strings.ToLower(strings.TrimSpace(f.CloudProvider)) {
-		case "azure":
-			prefix = "azrbnkctl"
-		case "gcp", "gke":
-			prefix = "gkebnkctl"
-		case "aws", "eks":
-			prefix = "awsbnkctl"
-		default:
-			switch strings.ToLower(strings.TrimSpace(f.ProjectType)) {
-			case "cloud-azure":
-				prefix = "azrbnkctl"
-			case "cloud-gcp", "cloud-gke":
-				prefix = "gkebnkctl"
-			case "cloud-aws", "cloud-eks":
-				prefix = "awsbnkctl"
-			}
-		}
+	ws := strings.TrimSpace(workspaceName)
+	if ws == "" {
+		return "bnkctl"
 	}
-	if workspaceName == "" {
-		return prefix
-	}
-	return prefix + "-" + workspaceName
+	return "bnkctl-" + ws
 }
 
 // Derived holds computed names and IP endpoints derived from cluster.yaml (Azure + shared).

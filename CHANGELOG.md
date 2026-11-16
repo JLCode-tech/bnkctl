@@ -2,6 +2,13 @@
 
 All notable changes to `bnkctl` are documented in this file.
 
+## [2.7.2](https://github.com/JLCode-tech/bnkctl/compare/v2.7.1...v2.7.2) (2026-11-04)
+
+
+### Bug Fixes
+
+* **render,intent:** guard /28 subnet SelfIP masks and support /16../28 dataplane CIDRs ([#16](https://github.com/JLCode-tech/bnkctl/issues/16)) ([#17](https://github.com/JLCode-tech/bnkctl/issues/17)) ([a782cc4](https://github.com/JLCode-tech/bnkctl/commit/a782cc44816a8900a9785e59cd75b3ba362ee712))
+
 ## [2.7.1](https://github.com/JLCode-tech/bnkctl/compare/v2.7.0...v2.7.1) (2026-11-04)
 
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -893,8 +894,8 @@ func newForgeCmd(flags *GlobalFlags) *cobra.Command {
 	cmd.PersistentFlags().StringVar(&restURL, "forge-url", "", "Forge REST endpoint URL (defaults to http://localhost:8000)")
 	cmd.PersistentFlags().StringVar(&restURL, "url", "", "Forge REST endpoint URL (alias for --forge-url)")
 
-	var projectName, envName string
-	var postScan bool
+	var projectName, envName, credTemplateFlag, serverURLOverride string
+	var postScan, forceRegister, rescanRegister bool
 	registerCmd := &cobra.Command{
 		Use:   "register [cluster.yaml]",
 		Short: "Register the managed cluster with F5 Forge via MCP",
@@ -917,10 +918,31 @@ func newForgeCmd(flags *GlobalFlags) *cobra.Command {
 				return nil
 			}
 			kcPath := resolveKubeconfigFromState(flags, st)
+			if kcPath == "" {
+				for _, cand := range []string{
+					filepath.Join(wsDir, "kubeconfig"),
+					filepath.Join(wsDir, "artifacts", "kubeconfig"),
+					k8s.DefaultKubeconfigPath(),
+				} {
+					if cand != "" {
+						if _, statErr := os.Stat(cand); statErr == nil {
+							kcPath = cand
+							break
+						}
+					}
+				}
+			}
 			var kcBytes []byte
+			kcBaseDir := wsDir
 			if kcPath != "" {
+				kcBaseDir = filepath.Dir(kcPath)
 				// #nosec G304 -- operator or workspace kubeconfig file path
 				kcBytes, _ = os.ReadFile(kcPath)
+			}
+			if len(kcBytes) > 0 {
+				if _, pingErr := forge.PingServerVersionFunc(cmd.Context(), kcBytes, 5*time.Second); pingErr != nil {
+					fmt.Fprintf(cmd.OutOrStdout(), "Warning: pre-flight cluster reachability check failed: %v\n", pingErr)
+				}
 			}
 			effMCPURL := mcpURL
 			effRESTURL := restURL
@@ -928,6 +950,9 @@ func newForgeCmd(flags *GlobalFlags) *cobra.Command {
 			effEnv := envName
 			var credTemplateID int
 			var awsProfile string
+			var creds forge.RestCreds
+			cloudProv := string(p.Name())
+			var projType string
 			if cl != nil {
 				awsProfile = cl.Metadata.Profile
 				if cl.Forge != nil {
@@ -943,36 +968,89 @@ func newForgeCmd(flags *GlobalFlags) *cobra.Command {
 					if !cmd.Flags().Changed("environment") && cl.Forge.Environment != "" {
 						effEnv = cl.Forge.Environment
 					}
+					if !cmd.Flags().Changed("cloud") && cl.Forge.CloudProvider != "" {
+						cloudProv = cl.Forge.CloudProvider
+					}
+					projType = cl.Forge.ProjectType
 					credTemplateID = cl.Forge.CredentialTemplateID
+					username := cl.Forge.ResolveUsername()
+					password, _ := cl.Forge.ResolvePassword()
+					creds = forge.RestCreds{Username: username, Password: password}
 				}
 			}
+			if effRESTURL == "" {
+				effRESTURL = forge.DefaultForgeRESTURL
+			}
+			cloudProv = forge.NormalizeProvider(cloudProv, projType)
+			projType = forge.NormalizeProjectType(cloudProv, projType)
+			force := forceRegister || rescanRegister
+			runScan := postScan || rescanRegister
+
+			regReq := forge.RegisterRequest{
+				ForgeRESTURL:           effRESTURL,
+				WorkspaceName:          cl.EffectiveName(),
+				WorkspaceDir:           wsDir,
+				ProjectName:            effProjectName,
+				ClusterName:            cl.EffectiveName(),
+				Region:                 cl.EffectiveRegion(),
+				Kubeconfig:             kcBytes,
+				KubeconfigBaseDir:      kcBaseDir,
+				ServerURL:              serverURLOverride,
+				AWSProfile:             awsProfile,
+				Environment:            effEnv,
+				ProjectType:            projType,
+				CloudProvider:          cloudProv,
+				CredentialTemplateID:   credTemplateID,
+				CredentialTemplateName: credTemplateFlag,
+				RestCreds:              creds,
+				Force:                  force,
+				PostRegisterScan:       runScan,
+			}
 			client := forge.NewClient(effMCPURL)
-			res, err := forge.Register(cmd.Context(), client, forge.RegisterRequest{
-				ForgeRESTURL:         effRESTURL,
-				WorkspaceName:        cl.EffectiveName(),
-				WorkspaceDir:         wsDir,
-				ProjectName:          effProjectName,
-				ClusterName:          cl.EffectiveName(),
-				Region:               cl.EffectiveRegion(),
-				Kubeconfig:           kcBytes,
-				AWSProfile:           awsProfile,
-				Environment:          effEnv,
-				ProjectType:          "cloud-" + string(p.Name()),
-				CloudProvider:        string(p.Name()),
-				CredentialTemplateID: credTemplateID,
-				PostRegisterScan:     postScan,
-			})
+			res, err := forge.Register(cmd.Context(), client, regReq)
+			if err != nil && effRESTURL != "" {
+				if restRes, restErr := forge.RegisterREST(cmd.Context(), effRESTURL, regReq, creds); restErr == nil {
+					res = restRes
+					err = nil
+				}
+			}
 			if err != nil {
 				return err
 			}
+			if st != nil && res.Link != nil {
+				st.Set("FORGE_REGISTERED", "true")
+				st.Set("FORGE_PROJECT_ID", strconv.Itoa(res.Link.ProjectID))
+				st.Set("FORGE_CLUSTER_ID", strconv.Itoa(res.Link.ClusterID))
+				if res.Link.ForgeMCPURL != "" {
+					st.Set("FORGE_MCP_URL", res.Link.ForgeMCPURL)
+				}
+				_ = st.Save()
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Registered %s in Forge (project=%d cluster=%d)\n",
 				res.Link.ClusterName, res.Link.ProjectID, res.Link.ClusterID)
+			for _, w := range res.Warnings {
+				fmt.Fprintf(cmd.OutOrStdout(), "Warning: %s\n", w)
+			}
+			if res.ScanSummary != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "Scan: %s\n", res.ScanSummary)
+			} else if res.ScanOutput != "" && res.ScanErr == nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "Scan: %s\n", res.ScanOutput)
+			}
+			if res.HealthSummary != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "Health: %s\n", res.HealthSummary)
+			} else if res.HealthCheck != "" && res.HealthErr == nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "Health: %s\n", res.HealthCheck)
+			}
 			return nil
 		},
 	}
-	registerCmd.Flags().StringVar(&projectName, "project", "", "Forge project name")
+	registerCmd.Flags().StringVar(&projectName, "project", "", "Forge project name (defaults to bnkctl-<workspace>)")
 	registerCmd.Flags().StringVar(&envName, "environment", "dev", "Forge project environment")
 	registerCmd.Flags().BoolVar(&postScan, "scan", true, "Run post-registration cluster scan and BNK health smoke check")
+	registerCmd.Flags().BoolVar(&forceRegister, "force", false, "Bypass existing forge_link.json idempotency to re-upload kubeconfig and re-scan")
+	registerCmd.Flags().BoolVar(&rescanRegister, "rescan", false, "Re-upload kubeconfig and re-trigger cluster scan (alias for --force)")
+	registerCmd.Flags().StringVar(&credTemplateFlag, "credential-template", "", "Forge Credential Template ID or name to attach to the project")
+	registerCmd.Flags().StringVar(&serverURLOverride, "server-url", "", "Override the Kubernetes API server URL in the uploaded kubeconfig")
 
 	var purge bool
 	unregisterCmd := &cobra.Command{

@@ -124,11 +124,34 @@ func TestForgeREST_FullLifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatalf("RegisterREST AWS: %v", err)
 		}
-		if res.Link == nil || res.Link.ProjectName != "awsbnkctl-aws-cluster" {
-			t.Fatalf("expected ProjectName awsbnkctl-aws-cluster, got %+v", res.Link)
+		if res.Link == nil || res.Link.ProjectName != "bnkctl-aws-cluster" {
+			t.Fatalf("expected ProjectName bnkctl-aws-cluster, got %+v", res.Link)
 		}
-		if _, ok := projects["awsbnkctl-aws-cluster"]; !ok {
-			t.Errorf("expected server to receive project name awsbnkctl-aws-cluster, got projects=%v", projects)
+		if _, ok := projects["bnkctl-aws-cluster"]; !ok {
+			t.Errorf("expected server to receive project name bnkctl-aws-cluster, got projects=%v", projects)
+		}
+	})
+
+	t.Run("provider and project_type normalization for openshift and onprem", func(t *testing.T) {
+		for _, tc := range []struct {
+			rawProv  string
+			wantProv string
+			wantType string
+		}{
+			{"openshift", "openshift", "kubernetes"},
+			{"ocp", "openshift", "kubernetes"},
+			{"on-prem", "onprem", "kubernetes"},
+			{"bare-metal", "baremetal", "kubernetes"},
+			{"kind", "kind", "kubernetes"},
+			{"aks", "azure", "cloud-azure"},
+			{"gke", "gcp", "cloud-gcp"},
+			{"eks", "aws", "cloud-aws"},
+		} {
+			gotProv := forge.NormalizeProvider(tc.rawProv, "")
+			gotType := forge.NormalizeProjectType(tc.rawProv, "")
+			if gotProv != tc.wantProv || gotType != tc.wantType {
+				t.Errorf("Normalize(%q) = (%q, %q), want (%q, %q)", tc.rawProv, gotProv, gotType, tc.wantProv, tc.wantType)
+			}
 		}
 	})
 
