@@ -20,10 +20,12 @@ forge:
   username: admin
 ```
 
-### What Happens During `bnkctl up` (Phase 29)
-1. **Project & Credential Resolution**: `bnkctl` authenticates to [BNK Forge](https://github.com/JLCode-tech/bnk-forge) (via REST and MCP), resolves or creates the target Forge Project, and attaches the cloud credential template.
-2. **Cluster Registration & Kubeconfig Sync**: Registers the newly provisioned EKS/AKS/GKE cluster, uploads its kubeconfig and network topology metadata, and writes `.bnkctl/<cluster>/forge_link.json` locally.
-3. **F5 BNK AI Service Plane & Governance Seeding**: When `bnk.aiGateway.enabled: true`, `bnkctl` automatically bootstraps the cluster's AI Governance organization, team, virtual API key (`f5vk_...`), and cloud LLM router pools in [BNK Forge](https://github.com/JLCode-tech/bnk-forge).
+### What Happens During `bnkctl up` (Phase 29) & `bnkctl forge register`
+1. **Pre-Flight Cluster Reachability Ping**: `bnkctl` pings the Kubernetes API server (`/version`) before contacting Forge and warns immediately if the cluster is offline or DNS is unreachable.
+2. **Kubeconfig Inlining & Container Loopback Rewriting**: Local `certificate-authority`, `client-certificate`, `client-key`, and `tokenFile` paths are flattened into embedded base64 `*-data` / `token` fields so OpenShift and On-Prem kubeconfigs work inside Forge containers. When Forge runs locally in Docker and the kubeconfig targets `127.0.0.1` or `localhost`, `bnkctl` automatically rewrites the endpoint to `host.docker.internal` while preserving TLS SNI (`tls-server-name`), or applies `--server-url`.
+3. **Project, Platform & Credential Template Resolution**: `bnkctl` normalizes cloud and platform providers (`aws`, `azure`, `gcp`, `openshift`, `onprem`, `baremetal`, `kind`), creates or reuses the standardized `bnkctl-<workspace>` project, validates default or `--credential-template <id|name>` credentials (warning if secrets are missing), binds the template, and activates the project in Forge.
+4. **Cluster Registration, Scan & Health Verification**: Uploads the flattened kubeconfig, writes `forge_link.json` in the workspace state directory, triggers an immediate cluster scan and BNK health check, and prints structured `Scan:` and `Health:` summaries (`bnk`, `api`, `flo`, `tmm`, `controller`, `overall`, `dataPlane`, `gateways`, `httpRoutes`).
+5. **F5 BNK AI Service Plane & Governance Seeding**: When `bnk.aiGateway.enabled: true`, `bnkctl` automatically bootstraps the cluster's AI Governance organization, team, virtual API key (`f5vk_...`), and cloud LLM router pools in [BNK Forge](https://github.com/JLCode-tech/bnk-forge).
 
 ### What Happens During `bnkctl down`
 - Before destroying the cloud underlay, `bnkctl down` automatically unregisters the cluster from [BNK Forge](https://github.com/JLCode-tech/bnk-forge) and removes stale cluster links so your Forge dashboard never accumulates orphaned clusters.
@@ -105,11 +107,24 @@ And connect any MCP-compatible AI coding or operations assistant to [BNK Forge](
 ## 6. `bnkctl forge` CLI Commands
 
 ```bash
-# Check Forge link status and server reachability
+# Check Forge link status and server reachability (accepts cluster.yaml or workspace state dir)
 bnkctl forge status -c cluster.yaml
+bnkctl forge status -c .azrbnkctl/poc-dual-interface
 
-# Manually register or re-register an active cluster with BNK Forge
+# Register a cluster with BNK Forge (runs pre-flight ping, flattens kubeconfig, validates template, scans & checks health)
 bnkctl forge register -c cluster.yaml
+bnkctl forge register -c .azrbnkctl/poc-dual-interface
+
+# Force re-upload of kubeconfig and re-trigger cluster scan & BNK health check (bypasses forge_link.json idempotency)
+bnkctl forge register --rescan -c .azrbnkctl/poc-dual-interface
+bnkctl forge register --force -c cluster.yaml
+
+# Explicitly bind a Forge Credential Template by ID or name
+bnkctl forge register --credential-template "Azure Local - ALM2" -c .azrbnkctl/poc-dual-interface
+bnkctl forge register --credential-template 5 -c cluster.yaml
+
+# Register an OpenShift, On-Prem, Bare-Metal, or Kind cluster with an explicit API server URL override
+bnkctl forge register --cloud openshift --kubeconfig ~/.kube/ocp-config --server-url https://api.ocp.example.com:6443
 
 # Inspect the Multi-Cluster F5 BNK AI Service Plane dependency graph & readiness checklist
 bnkctl forge governance overview -c cluster.yaml
@@ -123,6 +138,7 @@ bnkctl forge governance test-request -c cluster.yaml
 # Remediate BNK 2.4.1 F5 BNK AI Service Plane configuration drift via Forge
 bnkctl forge governance remediate -c cluster.yaml
 
-# Unregister the cluster from BNK Forge
+# Unregister the cluster from BNK Forge (or --purge to also delete the parent Forge project)
 bnkctl forge unregister -c cluster.yaml
+bnkctl forge unregister --purge -c .azrbnkctl/poc-dual-interface
 ```

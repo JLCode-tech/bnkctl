@@ -897,8 +897,27 @@ func newForgeCmd(flags *GlobalFlags) *cobra.Command {
 	var projectName, envName, credTemplateFlag, serverURLOverride string
 	var postScan, forceRegister, rescanRegister bool
 	registerCmd := &cobra.Command{
-		Use:   "register [cluster.yaml]",
-		Short: "Register the managed cluster with F5 Forge via MCP",
+		Use:   "register [cluster.yaml|workspace-dir]",
+		Short: "Register or rescan a managed cluster with F5 Forge (AWS, Azure, GCP, OpenShift, On-Prem)",
+		Long: `Register a Kubernetes cluster and project with F5 BNK Forge (via MCP and REST).
+
+Performs a pre-flight Kubernetes API reachability check (/version), flattens/inlines
+local kubeconfig certificate/key/tokenFile paths into embedded base64 data, rewrites
+127.0.0.1/localhost API endpoints to host.docker.internal when Forge runs in Docker,
+resolves and validates cloud Credential Templates, activates the Forge project, and
+runs post-registration cluster scan and BNK health checks.`,
+		Example: `  # Register from a cluster.yaml intent file or workspace state directory
+  bnkctl forge register -c examples/agentfoundry-demo/cluster.yaml
+  bnkctl forge register -c .azrbnkctl/poc-dual-interface
+
+  # Force re-upload of kubeconfig and re-trigger cluster scan & BNK health check
+  bnkctl forge register --rescan -c .azrbnkctl/poc-dual-interface
+
+  # Explicitly bind a Forge Credential Template by ID or name
+  bnkctl forge register --credential-template "Azure Local - ALM2" -c .azrbnkctl/poc-dual-interface
+
+  # Register an OpenShift or On-Prem cluster with an explicit API server URL override
+  bnkctl forge register --cloud openshift --kubeconfig ~/.kube/ocp-config --server-url https://api.ocp.example.com:6443`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			applyPositionalConfig(flags, args)
 			cl, st, p, err := resolveRuntime(flags)
@@ -1054,8 +1073,13 @@ func newForgeCmd(flags *GlobalFlags) *cobra.Command {
 
 	var purge bool
 	unregisterCmd := &cobra.Command{
-		Use:   "unregister [cluster.yaml]",
-		Short: "Unregister the workspace cluster from F5 Forge",
+		Use:   "unregister [cluster.yaml|workspace-dir]",
+		Short: "Unregister the workspace cluster (and optionally purge project) from F5 Forge",
+		Example: `  # Unregister cluster while preserving the parent Forge project
+  bnkctl forge unregister -c .azrbnkctl/poc-dual-interface
+
+  # Unregister cluster and delete the parent Forge project
+  bnkctl forge unregister --purge -c .azrbnkctl/poc-dual-interface`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			applyPositionalConfig(flags, args)
 			cl, st, _, err := resolveRuntime(flags)
